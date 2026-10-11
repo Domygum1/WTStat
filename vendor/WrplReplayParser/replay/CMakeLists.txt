@@ -1,0 +1,8 @@
+add_subdirectory(idFieldSerializer)
+add_subdirectory(network)
+add_subdirectory(ecs)
+add_subdirectory(mpi)
+add_subdirectory(init)
+add_subdirectory(Replay)
+add_subdirectory(events)
+add_subdirectory(state)

@@ -1,0 +1,28 @@
+# WTStat 进度（2026-10-10）
+
+- 架构：FastAPI + 静态前端 + SQLite；官网昵称搜索按页缓存 5 分钟；详情按需下载并缓存 Replay。`start.bat` 启动本地 8766 端口。
+- 官网匿名访问 `https://warthunder.com/en/tournament/replay/` 返回登录表单；搜索需本人 `identity_sid`。2026-10-10 确认新页面由 Vue 渲染，旧 HTML 选择器不能读取列表；现改用官网 `POST /en/api/replay`，支持 `USERNAME` 与 `ID` 搜索。
+- 真实 Session `8278619900504942392`（十六进制 `72e390f00013a738`）的 `0000.wrpl`：`HEAD` 返回 404，但 `GET` 返回 200，Range 请求 206。该 Replay 共 14 段，下一段为 404；已保存在 `cache/replays/72e390f00013a738/`。
+- 比较：[WT-Plotter](https://github.com/Sgambe33/WT-Plotter)偏本地回放；[WrplReplayParser](https://github.com/LivingTheDagor/WrplReplayParser)为 C++/Python、标注旧版本；[warthunder-replay-parser](https://github.com/nilshellerhoff/warthunder-replay-parser)的简单字节扫描不足以取完整战绩；采用 [wrpl-inspector](https://github.com/maxsupermanhd/wrpl-inspector) 的 Go BLK 与 carve 代码。
+- 对该真实样本，zstd 兼容后的结算 BLK 可读出 32 名玩家，含 UID、队伍、击杀/死亡/助攻/得分和配置载具。carve 实体解析有旧版本不兼容，无法确定实际出击载具：目前保持 N/A，不把配置当实际出击。
+- 载具显示名、国家与地图名读取 WT-Plotter 的确切目录映射；样本地图译为 Normandy。FastAPI TestClient 验证首页 200、状态 200、Session 搜索 200、详情 200（32 人）、无 Cookie 昵称搜索 401；前端脚本通过 `node --check`。
+- 2026-10-10 用户已自行配置 Cookie：用真实官网 API 测得昵称 141 场、UID 141 场；程序端首屏昵称/UID 均显示 15 场，第二页 15 场。官方 `GET /en/api/replay/{session}` 返回基本资料和玩家名单，但无击杀/死亡/得分，因此详情仍按需解析 Replay。
+- 用户仍见 0 场时确认 8765 端口由旧版后端占用：该进程返回不带 `total` 的旧响应，读到旧缓存中的 0；磁盘上新版后端返回 15/141。启动端口改为 8766，增加仅关闭本项目服务进程的 `stop.bat`，前端遇旧响应会明确提示，日期框标注 UTC，页面禁用 HTML 缓存。
+- 部分新载具如 `f_14d` 不在 WT-Plotter 内置名称表中，故旧详情显示原始代码和 N/A 国家。已依据官方 Wiki 补齐当前缓存中缺失的 12 个代码，国家按游戏科技树归属；详情读取旧缓存时会重新映射，无需重复下载 Replay。未知代码仍保持 N/A。
+- Wiki 载具表：`scripts/update_wiki_vehicles.py` 从五个公开分类页的 `WT_UnitList` 和 sitemap 一次读取 3,252 个载具，整理名称、科技树、Operator 及各模式 BR 到 `data/wtstat.sqlite3` 的 `wiki_vehicles` 表和 `data/wiki_vehicles.csv`。sitemap 对照为 3,252/3,252，缺失 0；108 个列表中被小写化的代码已按 sitemap 校正。`/vehicles` 可分页筛选，`/api/vehicles.csv` 可下载；Replay 详情优先使用此表。Wiki 本身缺 3 个 Operator 和 26 个 BR，保留空值。
+- 特殊前缀：东德名称的原始字符是 U+25CA `◊`；Wiki 在载具名称使用 `WTSymbols` 字体把它绘制为游戏标志。已将 Wiki 的 57 KB 字体保存到 `static/fonts/`，本地载具表及对局详情的名称均使用此字体；验证其 cmap 含 U+25CA，字体接口返回 200。
+- 详情页显示 Replay 的配置载具，列名只标“载具”，不在页面提示是否实际出击；点击击杀/死亡/助攻/得分表头排序，再次点击切换方向，两个队伍独立。当前新版 Replay 实体解析仍无法可靠确认实际出击。
+- 修复排序按钮悬停时通用黄色背景覆盖文字；`stop.bat` 去掉按键暂停。关闭 `start.bat` 命令窗口可结束前台服务，浏览器关闭不影响服务。
+- AI 统计修正：原始结算的 `aiKills`、`aiGroundKills`、`aiNavalKills` 分开计数；页面现显示三项合计与非零分类，隐藏一直为 0 的 `humanKills`。旧缓存详情点击时仅用本地 WRPL 补齐遗漏的两个 AI 字段，不请求服务器；原始文件缺失则显示 N/A。
+- 验证：4 场已缓存空战的 AI 分类合计分别为 9、7、2、12；后端补齐测试阻断网络请求，JS 显示测试及语法检查通过。
+- 将 `kills` 与 `groundKills` 在详情页相邻显示为“空中击杀”和“地面击杀”；地面击杀从“其他”移出，也可点击表头排序。
+- 详情页以配置载具的科技树国家显示“队列国籍”（224 条已缓存玩家记录均一致）；UID 改为悬停昵称显示，载具标签移除重复国家名。
+- 国籍排序与旗帜：Windows 对 Unicode 国旗支持不稳，页面改用项目内的 10 个 SVG（现行国家来自 flag-icons MIT，苏联来自 Wikimedia Public Domain），悬停旗帜看名称；两队独立点击排序。7 场缓存中的 432 条载具记录涉及 213 个不同代码，213/213 均与 Wiki 表对应；点击详情中的载具可按内部代码精确打开本地唯一资料行，避免模糊搜索命中同名变体。
+- 命令：`start.bat`；直接验证：`python -c "from app import detail; print(len(detail('8278619900504942392')['players']))"`。
+- 待处理：完善新版 WRPL 实体映射以确认实际出击载具。
+- 载具资料页返回按钮会携带来源 Session ID，点击直接重开该场对局详情；无来源时返回查询页。按钮改为高对比色块，前端脚本语法及链接检查通过。
+- 修复返回载具资料后丢失玩家对局列表：详情入口将查询词、日期、已加载列表和分页位置保存在本标签页；载具链接及返回链接携带查询参数。回到详情再点“返回列表”可恢复此前玩家记录，前端脚本语法检查通过。
+- 载具资料表搜索新增忽略型号中的连字符、下划线、空格等符号的匹配；真实本地 Wiki 数据验证 `F14D` 与 `F-14D` 均返回 `f_14d` 等 2 条结果。
+- 载具搜索表单及输入框设置 `autocomplete="off"`，抑制浏览器显示该输入框的历史输入建议，与玩家搜索框一致。
+- 载具资料表的 5 个 BR 表头可点击做全结果升降序排序（空值末尾，分页保持排序）；“主”改为按筛选类别显示的模式名称，航空类显示“空战”。验证 3252 条真实载具数据下 5 列双方向排序、分页及前端脚本语法。
+- 5 个 BR 值统一在页面显示一位小数（如 14.0）；搜索加入 F/A-18 家族的 F18 简写别名，同时保留 F/A18、F/A-18、FA18 的正常匹配。真实本地数据验证 `f18` 命中 13 条，格式与脚本检查通过。
