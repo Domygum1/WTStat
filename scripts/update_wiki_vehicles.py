@@ -24,7 +24,7 @@ BASE = "https://wiki.warthunder.com"
 CATEGORIES = ("aviation", "helicopters", "ground", "ships", "boats")
 LIST_RE = re.compile(r"window\.WT_UnitList\s*=\s*'((?:\\.|[^'])*)'\s*;")
 FIELDS = (
-    "vehicle_id", "name", "category", "research_country_code", "research_country",
+    "vehicle_id", "name", "category", "vehicle_role", "research_country_code", "research_country",
     "operator_country", "operator_countries_json", "br_ab", "br_rb", "br_sb",
     "br_ground_rb", "br_ground_sb", "source_url", "updated_utc",
 )
@@ -105,15 +105,21 @@ def parse_page(page: str, category: str, updated: str) -> list[dict]:
 
     rows = []
     for unit in units:
-        if len(unit) < 7 or not isinstance(unit[4], (dict, list)):
+        if len(unit) < 8 or not isinstance(unit[4], (dict, list)):
             raise RuntimeError(f"Unexpected unit row in {category}")
         code, name, country_code, _, ratings, _, collections = unit[:7]
+        role_details = unit[7]
+        role = (clean(role_details[0][1]) if isinstance(role_details, list)
+                and role_details and isinstance(role_details[0], list)
+                and len(role_details[0]) >= 2 and isinstance(role_details[0][1], str)
+                else None)
         ratings = ratings if isinstance(ratings, dict) else {}
         op = sorted({operators[value] for value in collections if value in operators})
         rows.append({
             "vehicle_id": code,
             "name": clean(name),
             "category": category,
+            "vehicle_role": role,
             "research_country_code": country_code,
             "research_country": country_names.get(country_code),
             "operator_country": "; ".join(op) or None,
@@ -137,6 +143,7 @@ def save(rows: list[dict]) -> None:
         connection.execute("""
             CREATE TABLE IF NOT EXISTS wiki_vehicles (
                 vehicle_id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL,
+                vehicle_role TEXT,
                 research_country_code TEXT, research_country TEXT,
                 operator_country TEXT, operator_countries_json TEXT,
                 br_ab REAL, br_rb REAL, br_sb REAL,
@@ -144,6 +151,8 @@ def save(rows: list[dict]) -> None:
                 source_url TEXT NOT NULL, updated_utc TEXT NOT NULL
             )
         """)
+        if "vehicle_role" not in {column[1] for column in connection.execute("PRAGMA table_info(wiki_vehicles)")}:
+            connection.execute("ALTER TABLE wiki_vehicles ADD COLUMN vehicle_role TEXT")
         connection.execute("DELETE FROM wiki_vehicles")
         connection.executemany(
             f"INSERT INTO wiki_vehicles ({','.join(FIELDS)}) VALUES ({','.join('?' for _ in FIELDS)})",

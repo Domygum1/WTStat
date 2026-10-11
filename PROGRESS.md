@@ -1,6 +1,14 @@
-# WTStat 进度（2026-10-10）
+# WTStat 进度（2026-10-11）
 
 - 架构：FastAPI + 静态前端 + SQLite；官网昵称搜索按页缓存 5 分钟；详情按需下载并缓存 Replay。`start.bat` 启动本地 8766 端口。
+- 2026-10-11：搜索页自动保留最近成功查询的 5 位玩家（昵称或 UID），保存在 SQLite 的 `recent_players` 表；可一键关注到 `favorites` 表并长期保留。Session ID 不计入，读取本地列表不访问 Gaijin。
+- 2026-10-11：对局列表按本地 `matches` 记录或 `.wrpl` 文件标记缓存；有缓存的对局显示红色垃圾桶，确认后 `DELETE /api/cache/{session}` 仅清除该局的 Replay 分段与解析结果，官网分页缓存与对局条目保留。
+- 2026-10-11：对局列表增加类型（全部／空战／陆战／海战）和模式（全部／街机／历史／全真）组合筛选，依据官网 `statisticGroup`、`gameMode` 字段对已加载页即时过滤；切换不请求官网，加载更多继续扩展范围，返回载具页时保留筛选状态。
+- 2026-10-11：详情按本局官网 `gameMode`/`statisticGroup` 从本地 Wiki 载具表计算每位玩家所列载具的最高 BR，陆战 RB/SB 的飞机使用专用地面 BR；缺少任一必要值则显示 N/A。列表元数据优先复用本地缓存，直接 Session 缺模式时可凭已配置 Cookie 按需查询官网单场元数据并缓存；真实空战全真缓存样本 5/5 人算出权重。
+- 2026-10-11：详情表格的权重列移到队列国籍和载具之间，表头简写为“权重”，计算和排序方式不变。
+- 2026-10-11：详情页按查询昵称或 UID 在本局玩家中定位唯一匹配项，以低对比度行背景和细色条高亮；排序后高亮跟随玩家。Session ID 直查不指定玩家时不高亮。
+- 2026-10-11：详情载具列表按 Wiki 分类陆战＞空战＞直升机＞海战排序，同类再按本局模式对应 BR 降序；缺 BR 的同类末尾，未知类别最后。仅排序返回的列表，不改变缓存中的原始配置顺序。
+- 2026-10-11：真实 Replay `127b004900213e1d` 共 68 段，原 64 段上限导致详情报错；安全上限改为 256，已缓存分段复用。补齐后实际解析成功，返回 5 名玩家。
 - 官网匿名访问 `https://warthunder.com/en/tournament/replay/` 返回登录表单；搜索需本人 `identity_sid`。2026-10-10 确认新页面由 Vue 渲染，旧 HTML 选择器不能读取列表；现改用官网 `POST /en/api/replay`，支持 `USERNAME` 与 `ID` 搜索。
 - 真实 Session `8278619900504942392`（十六进制 `72e390f00013a738`）的 `0000.wrpl`：`HEAD` 返回 404，但 `GET` 返回 200，Range 请求 206。该 Replay 共 14 段，下一段为 404；已保存在 `cache/replays/72e390f00013a738/`。
 - 比较：[WT-Plotter](https://github.com/Sgambe33/WT-Plotter)偏本地回放；[WrplReplayParser](https://github.com/LivingTheDagor/WrplReplayParser)为 C++/Python、标注旧版本；[warthunder-replay-parser](https://github.com/nilshellerhoff/warthunder-replay-parser)的简单字节扫描不足以取完整战绩；采用 [wrpl-inspector](https://github.com/maxsupermanhd/wrpl-inspector) 的 Go BLK 与 carve 代码。
@@ -10,6 +18,7 @@
 - 用户仍见 0 场时确认 8765 端口由旧版后端占用：该进程返回不带 `total` 的旧响应，读到旧缓存中的 0；磁盘上新版后端返回 15/141。启动端口改为 8766，增加仅关闭本项目服务进程的 `stop.bat`，前端遇旧响应会明确提示，日期框标注 UTC，页面禁用 HTML 缓存。
 - 部分新载具如 `f_14d` 不在 WT-Plotter 内置名称表中，故旧详情显示原始代码和 N/A 国家。已依据官方 Wiki 补齐当前缓存中缺失的 12 个代码，国家按游戏科技树归属；详情读取旧缓存时会重新映射，无需重复下载 Replay。未知代码仍保持 N/A。
 - Wiki 载具表：`scripts/update_wiki_vehicles.py` 从五个公开分类页的 `WT_UnitList` 和 sitemap 一次读取 3,252 个载具，整理名称、科技树、Operator 及各模式 BR 到 `data/wtstat.sqlite3` 的 `wiki_vehicles` 表和 `data/wiki_vehicles.csv`。sitemap 对照为 3,252/3,252，缺失 0；108 个列表中被小写化的代码已按 sitemap 校正。`/vehicles` 可分页筛选，`/api/vehicles.csv` 可下载；Replay 详情优先使用此表。Wiki 本身缺 3 个 Operator 和 26 个 BR，保留空值。
+- 2026-10-11：从官方 Wiki 列表内嵌的主角色字段新增 `vehicle_role`；已离线重建 3,252 条 SQLite/CSV 数据，并在载具资料页新增“Wiki 类型”列。该字段是游戏角色（如 Medium tank、SPAA、Fighter、Strike aircraft），不能直接视为现实设计分类或把 Medium tank 统一改称主战坦克。
 - 特殊前缀：东德名称的原始字符是 U+25CA `◊`；Wiki 在载具名称使用 `WTSymbols` 字体把它绘制为游戏标志。已将 Wiki 的 57 KB 字体保存到 `static/fonts/`，本地载具表及对局详情的名称均使用此字体；验证其 cmap 含 U+25CA，字体接口返回 200。
 - 详情页显示 Replay 的配置载具，列名只标“载具”，不在页面提示是否实际出击；点击击杀/死亡/助攻/得分表头排序，再次点击切换方向，两个队伍独立。当前新版 Replay 实体解析仍无法可靠确认实际出击。
 - 修复排序按钮悬停时通用黄色背景覆盖文字；`stop.bat` 去掉按键暂停。关闭 `start.bat` 命令窗口可结束前台服务，浏览器关闭不影响服务。
@@ -26,3 +35,6 @@
 - 载具搜索表单及输入框设置 `autocomplete="off"`，抑制浏览器显示该输入框的历史输入建议，与玩家搜索框一致。
 - 载具资料表的 5 个 BR 表头可点击做全结果升降序排序（空值末尾，分页保持排序）；“主”改为按筛选类别显示的模式名称，航空类显示“空战”。验证 3252 条真实载具数据下 5 列双方向排序、分页及前端脚本语法。
 - 5 个 BR 值统一在页面显示一位小数（如 14.0）；搜索加入 F/A-18 家族的 F18 简写别名，同时保留 F/A18、F/A-18、FA18 的正常匹配。真实本地数据验证 `f18` 命中 13 条，格式与脚本检查通过。
+- 2026-10-11：载具资料表前三个权重表头固定为 AB/RB/SB，后两列明确标为“飞机陆战 RB/SB”；保留原有排序，并检查前端脚本语法。
+- 2026-10-11：对局列表增加“清除所有对局缓存”按钮及 `DELETE /api/cache`。按用户反馈，批量清理只删除 Replay 分段和解析结果；官网分页缓存、当前列表、筛选/分页状态及玩家关注等资料均保留，并移除列表中的本地缓存标记。
+- 2026-10-11：基于 wrpl-inspector 修复击杀包遇到未知 ECS UID 就中断的问题，保留原始战斗事件；击杀者由包内玩家槽位关联，受害者只用该次死亡之前同一 ECS UID 的已确认归属关联，死亡后清除以防 UID 复用，冲突或未知显示 N/A。真实 20 段样本 `127b0049001eedc1`：135 条死亡记录，击杀者 UID 132、受害者 UID 62、双方 UID 61；受害者对应次数均未超过结算死亡数。详情底部新增可展开记录；缓存已有本地 Replay 时按需补齐并存 SQLite。ECS 初始化组件在新版协议中仍不能完整解码，无法保证每条受害者身份或实际出击载具。

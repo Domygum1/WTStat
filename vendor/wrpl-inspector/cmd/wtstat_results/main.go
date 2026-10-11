@@ -64,7 +64,7 @@ func carveDir(dir, hashes string) {
 		if vehicles[e.PlayerID] == nil { vehicles[e.PlayerID] = map[string]bool{} }
 		vehicles[e.PlayerID][e.ModelName] = true
 	}
-	out := map[string]any{"session_id": fmt.Sprintf("%016x",c.SessionID), "start_time": c.TimeStarted, "level": c.Mission.Level, "players": c.Players, "spawned": vehicles, "errors": c.CarveErrors}
+	out := map[string]any{"session_id": fmt.Sprintf("%016x",c.SessionID), "start_time": c.TimeStarted, "level": c.Mission.Level, "players": c.Players, "spawned": vehicles, "kills": c.Kills, "errors": c.CarveErrors}
 	if err := json.NewEncoder(os.Stdout).Encode(out); err != nil { fail(err) }
 }
 

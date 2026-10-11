@@ -20,7 +20,6 @@ package packetkill
 
 import (
 	"encoding/binary"
-	"fmt"
 
 	"github.com/maxsupermanhd/wrpl-inspector/v3/wrpl/danet"
 	"github.com/maxsupermanhd/wrpl-inspector/v3/wrpl/game"
@@ -36,12 +35,15 @@ type KillEntry struct {
 	CurrentTime uint32
 
 	KillerPid              uint32
+	HasKillerPid           bool
 	KillerUid              uint16
+	HasKillerUid           bool
 	ResolvedKiller         *ecs2.Entity
 	ResolvedKillerPosition *game.SpaceTime
 
 	VictimPid              uint32
 	VictimUid              uint16
+	HasVictimUid           bool
 	ResolvedVictim         *ecs2.Entity
 	ResolvedVictimPosition *game.SpaceTime
 
@@ -83,10 +85,12 @@ func (p *PacketKillParser) Parse(pk *packet.Packet) (any, error) {
 	err = idfieldserializer.DeserializeIdFieldSerializer32(r, func(fieldNum uint8, _ uint32) error {
 		switch fieldNum {
 		case 1:
+			parsed.HasKillerPid = true
 			return binary.Read(r, binary.LittleEndian, &parsed.KillerPid)
 		case 2:
 			return r.ReadLenStrInto(&parsed.PlayerVehicle)
 		case 3:
+			parsed.HasVictimUid = true
 			err = binary.Read(r, binary.LittleEndian, &parsed.VictimUid)
 			parsed.VictimUid &= 0x7FF
 			if err != nil {
@@ -95,7 +99,8 @@ func (p *PacketKillParser) Parse(pk *packet.Packet) (any, error) {
 			if parsed.VictimUid != 0x7FF {
 				resolved, ok := p.ECS.GetEntityByUid(int32(parsed.VictimUid))
 				if !ok {
-					return fmt.Errorf("failed to resolve victim uid %v", parsed.VictimUid)
+					// Keep the battle report even when an ECS entity could not be parsed.
+					break
 				}
 				parsed.ResolvedVictim = resolved
 				if p.PathsGround != nil {
@@ -137,6 +142,7 @@ func (p *PacketKillParser) Parse(pk *packet.Packet) (any, error) {
 				}
 			}
 		case 4:
+			parsed.HasKillerUid = true
 			err = binary.Read(r, binary.LittleEndian, &parsed.KillerUid)
 			parsed.KillerUid &= 0x7FF
 			if err != nil {
@@ -145,7 +151,7 @@ func (p *PacketKillParser) Parse(pk *packet.Packet) (any, error) {
 			if parsed.KillerUid != 0x7FF {
 				resolved, ok := p.ECS.GetEntityByUid(int32(parsed.KillerUid))
 				if !ok {
-					return fmt.Errorf("failed to resolve killer uid %v", parsed.KillerUid)
+					break
 				}
 				parsed.ResolvedKiller = resolved
 				if p.PathsGround != nil {

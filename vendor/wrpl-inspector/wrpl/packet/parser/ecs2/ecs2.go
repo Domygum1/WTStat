@@ -56,6 +56,7 @@ type ParsedPacketECS struct {
 	DecompressSize   int
 	MessageCount     byte
 	Messages         []*Message
+	MessageErrors    []string
 }
 
 type TemplateIdx uint16
@@ -311,7 +312,13 @@ func (p *PacketECSParser) Parse(pk *packet.Packet) (any, error) {
 		for range uint64(dat.MessageCount) + 1 {
 			msg, err := p.ParseECSConstructMessage(r)
 			if err != nil {
-				return nil, fmt.Errorf("reading ecs construct message: %w", err)
+				// Construction blobs are length-delimited. A bad entity should not
+				// discard all subsequent entities in the same packet.
+				if msg == nil || msg.Data == nil {
+					return nil, fmt.Errorf("reading ecs construct message: %w", err)
+				}
+				dat.MessageErrors = append(dat.MessageErrors, err.Error())
+				continue
 			}
 			dat.Messages = append(dat.Messages, msg)
 		}

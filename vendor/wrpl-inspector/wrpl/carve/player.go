@@ -10,6 +10,7 @@ import (
 )
 
 type SessionPlayer struct {
+	Slot     uint8
 	PlayerID uint64
 	Name     string
 	ClanTag  string
@@ -48,7 +49,7 @@ func assemblePlayers(results map[string]any, slots [256]*packetslot.Player) (ret
 		resultsPlayers, _ = results["player"].([]any)
 		resultsMatchingInfo, _ = results["matchingInfo"].(map[string]any)
 	}
-	for _, p := range slots {
+	for slot, p := range slots {
 		if p == nil {
 			continue
 		}
@@ -59,6 +60,7 @@ func assemblePlayers(results map[string]any, slots [256]*packetslot.Player) (ret
 			continue
 		}
 		player := SessionPlayer{
+			Slot:     uint8(slot),
 			PlayerID: uint64(p.Uid.Player_id),
 			Name:     p.Uid.Name,
 			ClanTag:  p.ClanTag,

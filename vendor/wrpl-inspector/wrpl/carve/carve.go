@@ -163,6 +163,11 @@ func CarveReplay(readers map[int]*wrpl.ReplayReader, ecsHashes packetecs2.Compon
 			}
 		}
 	}
+	for _, ecsPacket := range ecsp.Messages {
+		for _, messageErr := range ecsPacket.MessageErrors {
+			ret.CarveErrors = append(ret.CarveErrors, fmt.Sprintf("parsing ECS packet %d: %s", ecsPacket.PacketSeq, messageErr))
+		}
+	}
 	results, err := wrpl.ParseBlk(readers[parts[len(parts)-1]].Results)
 	if err != nil {
 		ret.CarveErrors = append(ret.CarveErrors, fmt.Errorf("parsing results blk: %w", err).Error())

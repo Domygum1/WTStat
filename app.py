@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import sqlite3
 import subprocess
 import threading
 import time
+from contextlib import closing
 from functools import lru_cache
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +24,7 @@ REPLAYS = ROOT / "cache" / "replays"
 PARSER = ROOT / "bin" / "wtstat_results.exe"
 HASHES = ROOT / "vendor" / "wrpl-inspector" / "data" / "ecshashes.json"
 FILES = "https://wt-game-replays.warthunder.com"
+MAX_REPLAY_PARTS = 256
 UA = "WTStat/1.0 (local personal replay viewer)"
 LOCK = threading.Lock()
 LAST_REQUEST = 0.0
@@ -35,6 +38,8 @@ def db():
     c.execute("CREATE TABLE IF NOT EXISTS pages (query TEXT, page INTEGER, fetched REAL, data TEXT, PRIMARY KEY(query,page))")
     c.execute("CREATE TABLE IF NOT EXISTS matches (sid TEXT PRIMARY KEY, data TEXT, fetched REAL)")
     c.execute("CREATE TABLE IF NOT EXISTS player_names (uid TEXT PRIMARY KEY, name TEXT, updated REAL)")
+    c.execute("CREATE TABLE IF NOT EXISTS favorites (uid TEXT PRIMARY KEY, added REAL NOT NULL)")
+    c.execute("CREATE TABLE IF NOT EXISTS recent_players (query TEXT PRIMARY KEY COLLATE NOCASE, searched REAL NOT NULL)")
     c.commit()
     return c
 
@@ -248,7 +253,7 @@ def vehicles(q: str = "", category: str = "", country: str = "", vehicle_id: str
             raise HTTPException(503, "载具表尚未生成。请运行 scripts/update_wiki_vehicles.py。")
         total = connection.execute("SELECT COUNT(*) FROM wiki_vehicles" + where, params).fetchone()[0]
         rows = connection.execute(
-            "SELECT vehicle_id,name,category,research_country_code,research_country,operator_country,"
+            "SELECT vehicle_id,name,category,vehicle_role,research_country_code,research_country,operator_country,"
             "br_ab,br_rb,br_sb,br_ground_rb,br_ground_sb,source_url "
             "FROM wiki_vehicles" + where + " ORDER BY " + order + " LIMIT ? OFFSET ?",
             [*params, limit, offset],
@@ -262,16 +267,123 @@ def status():
     return {"cookie_configured": bool(cookie()), "parser_ready": PARSER.exists()}
 
 
+@app.get("/api/favorites")
+def list_favorites():
+    with closing(db()) as c:
+        rows = c.execute("SELECT f.uid, f.uid AS query, p.name FROM favorites f LEFT JOIN player_names p ON p.uid = f.uid "
+                         "ORDER BY f.added DESC, f.uid").fetchall()
+    return {"items": [dict(row) for row in rows]}
+
+
+@app.get("/api/recent-players")
+def list_recent_players():
+    with closing(db()) as c:
+        rows = c.execute("SELECT r.query, p.name, EXISTS(SELECT 1 FROM favorites f WHERE f.uid = r.query) AS followed "
+                         "FROM recent_players r LEFT JOIN player_names p ON p.uid = r.query "
+                         "ORDER BY r.searched DESC, r.query LIMIT 5").fetchall()
+    return {"items": [dict(row) for row in rows]}
+
+
+def record_recent_player(query: str):
+    if len(query) > 64:
+        return
+    with closing(db()) as c:
+        c.execute("REPLACE INTO recent_players (query, searched) VALUES (?, ?)", (query, time.time()))
+        c.execute("DELETE FROM recent_players WHERE query NOT IN "
+                  "(SELECT query FROM recent_players ORDER BY searched DESC, query LIMIT 5)")
+        c.commit()
+
+
+@app.put("/api/favorites/{uid}")
+def add_favorite(uid: str):
+    uid = uid.strip()
+    if not uid or len(uid) > 64 or re.fullmatch(r"[0-9a-fA-F]{16}|\d{15,20}", uid):
+        raise HTTPException(400, "请输入玩家昵称或 UID，不要输入 Session ID。")
+    with closing(db()) as c:
+        c.execute("INSERT OR IGNORE INTO favorites (uid, added) VALUES (?, ?)", (uid, time.time()))
+        c.commit()
+    return {"uid": uid}
+
+
+@app.delete("/api/favorites/{uid}")
+def remove_favorite(uid: str):
+    with closing(db()) as c:
+        c.execute("DELETE FROM favorites WHERE uid = ?", (uid,))
+        c.commit()
+    return {"uid": uid}
+
+
+def cached_match_ids(sids):
+    sids = list(sids)
+    if not sids:
+        return set()
+    placeholders = ",".join("?" for _ in sids)
+    with closing(db()) as c:
+        cached = {row["sid"] for row in c.execute(
+            f"SELECT sid FROM matches WHERE sid IN ({placeholders})", sids)}
+    for sid in sids:
+        if sid not in cached and any((REPLAYS / sid).glob("*.wrpl")):
+            cached.add(sid)
+    return cached
+
+
+@app.delete("/api/cache/{session}")
+def delete_match_cache(session: str):
+    sid = normalize_sid(session)
+    base = REPLAYS.resolve()
+    folder = REPLAYS / sid
+    if folder.is_symlink() or folder.resolve().parent != base:
+        raise HTTPException(400, "缓存路径无效。")
+    try:
+        if folder.is_dir():
+            shutil.rmtree(folder)
+    except OSError as error:
+        raise HTTPException(409, "缓存文件正在使用或无法删除，请稍后重试。") from error
+    with closing(db()) as c:
+        c.execute("DELETE FROM matches WHERE sid = ?", (sid,))
+        c.commit()
+    return {"sid": sid, "cached": False}
+
+
+@app.delete("/api/cache")
+def clear_all_match_cache():
+    cache_root = ROOT.resolve() / "cache"
+    if ((ROOT / "cache").is_symlink() or REPLAYS.is_symlink()
+            or REPLAYS.resolve() != cache_root / "replays"):
+        raise HTTPException(400, "Replay 缓存路径无效。")
+    replay_sessions = replay_parts = 0
+    if REPLAYS.exists():
+        if not REPLAYS.is_dir():
+            raise HTTPException(409, "Replay 缓存路径不是目录。")
+        replay_sessions = sum(path.is_dir() for path in REPLAYS.iterdir())
+        replay_parts = sum(1 for _ in REPLAYS.rglob("*.wrpl"))
+        try:
+            shutil.rmtree(REPLAYS)
+        except OSError as error:
+            raise HTTPException(409, "Replay 文件正在使用或无法删除，请稍后重试。") from error
+    REPLAYS.mkdir(parents=True, exist_ok=True)
+    with closing(db()) as connection:
+        matches = connection.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
+        connection.execute("DELETE FROM matches")
+        connection.commit()
+    return {"replay_sessions": replay_sessions, "replay_parts": replay_parts,
+            "matches": matches}
+
+
 @app.get("/api/search")
 def search(q: str = Query(min_length=1), offset: int = Query(0, ge=0, le=10000),
            start: str | None = None, end: str | None = None):
     q = q.strip()
     if re.fullmatch(r"[0-9a-fA-F]{16}|\d{15,20}", q):
         sid = normalize_sid(q)
-        return {"items": [{"sid": sid, "title": "指定 Session", "date_text": None, "map": None}], "next_offset": None, "mode": "session"}
+        return {"items": [{"sid": sid, "title": "指定 Session", "date_text": None,
+                           "map": None, "cached": sid in cached_match_ids([sid])}],
+                "next_offset": None, "mode": "session"}
     kind = "ID" if q.isdigit() else "USERNAME"
     official_page = offset // 15 + 1
     result = site_page(q, official_page, kind)
+    if offset == 0 and result["total"] > 0:
+        record_recent_player(q)
     block = result["items"]
     selected = []
     for item in block:
@@ -279,6 +391,9 @@ def search(q: str = Query(min_length=1), offset: int = Query(0, ge=0, le=10000),
         if (start or end) and (not d or (start and d < start) or (end and d > end)):
             continue
         selected.append(item)
+    cached = cached_match_ids(item["sid"] for item in selected)
+    for item in selected:
+        item["cached"] = item["sid"] in cached
     more = offset + len(block) < result["total"]
     return {"items": selected, "next_offset": offset + 15 if more else None, "mode": kind.lower(), "query": q,
             "total": result["total"], "note": "官网时间按 UTC 显示；日期范围筛选当前增量读取的页面。"}
@@ -288,7 +403,7 @@ def download(sid):
     folder = REPLAYS / sid
     folder.mkdir(parents=True, exist_ok=True)
     files = []
-    for part in range(64):
+    for part in range(MAX_REPLAY_PARTS):
         path = folder / f"{part:04d}.wrpl"
         if path.exists() and path.stat().st_size > 1234:
             files.append(path)
@@ -325,7 +440,7 @@ def download(sid):
             raise HTTPException(504, f"下载第 {part} 段失败：{type(e).__name__}") from e
         finally:
             r.close()
-    raise HTTPException(502, "Replay 超过 64 段上限。")
+    raise HTTPException(502, f"Replay 超过 {MAX_REPLAY_PARTS} 段安全上限。")
 
 
 COUNTRIES = {"usa": "美国", "germany": "德国", "ussr": "苏联", "britain": "英国", "japan": "日本",
@@ -366,7 +481,8 @@ def wiki_catalog():
         if not connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='wiki_vehicles'").fetchone():
             return {}
         return {row["vehicle_id"].casefold(): dict(row) for row in connection.execute(
-            "SELECT vehicle_id,name,research_country_code,research_country,operator_country FROM wiki_vehicles"
+            "SELECT vehicle_id,name,research_country_code,research_country,operator_country,"
+            "category,br_ab,br_rb,br_sb,br_ground_rb,br_ground_sb FROM wiki_vehicles"
         )}
 
 
@@ -382,6 +498,40 @@ def vehicle(code):
         return {"name": name, "code": code, "country": COUNTRIES[country]}
     item = catalog()[0].get(code) or {}
     return {"name": item.get("en") or code, "code": code, "country": COUNTRIES.get(item.get("country"))}
+
+
+def replay_kill_events(carved, players):
+    names = {str(p["uid"]): p.get("name") for p in players}
+    events = []
+    for kill in carved.get("kills") or []:
+        killer_uid = str(kill.get("KillerID") or "")
+        victim_uid = str(kill.get("VictimID") or "")
+        if killer_uid not in names:
+            killer_uid = None
+        if victim_uid not in names:
+            victim_uid = None
+        events.append({
+            "time_ms": kill.get("Time"),
+            "killer_uid": killer_uid,
+            "killer_name": names.get(killer_uid),
+            "victim_uid": victim_uid,
+            "victim_name": names.get(victim_uid),
+            "weapon": kill.get("Weapon") or None,
+        })
+    return events
+
+
+def carve_local_replay(files, players):
+    carved = subprocess.run(
+        [str(PARSER), "--carve", str(files[0].parent), str(HASHES)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=90, check=True,
+    )
+    data = json.loads(carved.stdout)
+    spawned = data.get("spawned") or {}
+    for player in players:
+        player["spawned"] = [vehicle(code) for code in sorted(spawned.get(player["uid"], {}))]
+    return replay_kill_events(data, players)
 
 
 def parse_replay(sid, files):
@@ -415,12 +565,10 @@ def parse_replay(sid, files):
                         "teamKills": p.get("teamKills")})
     # The parser's entity reconstruction is version sensitive. Only publish a vehicle
     # as actually spawned if it is tied to the player's UID by an observed entity.
-    if len(files) > 1 and HASHES.exists():
+    kill_events = None
+    if files and HASHES.exists():
         try:
-            carved = subprocess.run([str(PARSER), "--carve", str(files[0].parent), str(HASHES)], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90, check=True)
-            spawned = json.loads(carved.stdout).get("spawned") or {}
-            for p in players:
-                p["spawned"] = [vehicle(v) for v in sorted(spawned.get(p["uid"], {}))]
+            kill_events = carve_local_replay(files, players)
         except (subprocess.SubprocessError, ValueError):
             pass
     start = header.get("start_time")
@@ -432,6 +580,8 @@ def parse_replay(sid, files):
             "level": level,
             "players": players, "source": "Replay 结算 BLK", "parts": len(files),
             "vehicle_note": "配置载具是玩家带入对局的阵容，不能证明每辆都实际出击。"}
+    if kill_events is not None:
+        data["kill_events"] = kill_events
     with db() as c:
         c.execute("REPLACE INTO matches VALUES (?,?,?)", (sid, json.dumps(data, ensure_ascii=False), time.time()))
         c.executemany("REPLACE INTO player_names VALUES (?,?,?)", [(p["uid"], p["name"], time.time()) for p in players if p["name"]])
@@ -467,6 +617,77 @@ def complete_cached_ai(sid, data, connection):
     return data
 
 
+def vehicle_battle_rating(code, mode, group):
+    """Use the Wiki BR for this match; aircraft have separate ground RB/SB BRs."""
+    if mode not in {"arcade", "realistic", "simulation"}:
+        return None
+    if group not in {"aircraft", "aviation", "air", "tank", "ground", "ground_vehicles",
+                     "ship", "ships", "fleet", "naval", "boat"}:
+        return None
+    item = wiki_catalog().get(str(code).casefold())
+    if not item:
+        return None
+    column = {"arcade": "br_ab", "realistic": "br_rb", "simulation": "br_sb"}[mode]
+    if item["category"] == "aviation" and group in {"tank", "ground", "ground_vehicles"}:
+        column = {"realistic": "br_ground_rb", "simulation": "br_ground_sb"}.get(mode, column)
+    return item[column]
+
+
+VEHICLE_CATEGORY_ORDER = {"ground": 0, "aviation": 1, "helicopters": 2,
+                          "boats": 3, "ships": 3}
+
+
+def vehicle_lineup_sort_key(item, mode, group):
+    code = item.get("code") or ""
+    wiki = wiki_catalog().get(str(code).casefold()) or {}
+    rating = vehicle_battle_rating(code, mode, group)
+    return (VEHICLE_CATEGORY_ORDER.get(wiki.get("category"), 4),
+            rating is None, -rating if rating is not None else 0)
+
+
+def add_battle_ratings(sid, data, connection):
+    """Resolve match mode lazily, then calculate each configured lineup's exact max BR."""
+    mode, group = data.get("game_mode"), data.get("battle_group")
+    changed = False
+    if not (mode and group):
+        for row in connection.execute("SELECT data FROM pages WHERE query LIKE 'api:%' ORDER BY fetched DESC"):
+            try:
+                found = next((item for item in json.loads(row["data"]).get("items", [])
+                              if item.get("sid") == sid), None)
+            except (TypeError, ValueError):
+                continue
+            if found:
+                mode = mode or found.get("game_mode")
+                group = group or found.get("vehicles")
+                break
+    if not (mode and group) and cookie() and time.time() - data.get("metadata_checked_at", 0) > 86400:
+        try:
+            response = request(f"https://warthunder.com/en/api/replay/{int(sid, 16)}", auth=True)
+            try:
+                if response.status_code == 200 and "application/json" in response.headers.get("Content-Type", ""):
+                    official = response.json().get("replay")
+                    if isinstance(official, dict):
+                        mode = mode or official.get("gameMode")
+                        group = group or official.get("statisticGroup")
+                    data["metadata_checked_at"] = time.time()
+                    changed = True
+            finally:
+                response.close()
+        except (HTTPException, ValueError):
+            pass
+    if mode != data.get("game_mode") or group != data.get("battle_group"):
+        data["game_mode"], data["battle_group"] = mode, group
+        changed = True
+    if changed:
+        connection.execute("UPDATE matches SET data=? WHERE sid=?", (json.dumps(data, ensure_ascii=False), sid))
+    for player in data.get("players", []):
+        configured = player.get("configured") or []
+        configured.sort(key=lambda item: vehicle_lineup_sort_key(item, mode, group))
+        ratings = [vehicle_battle_rating(item.get("code"), mode, group) for item in configured]
+        player["max_br"] = max(ratings) if ratings and all(value is not None for value in ratings) else None
+    return data
+
+
 @app.get("/api/detail/{session}")
 def detail(session: str):
     sid = normalize_sid(session)
@@ -474,12 +695,22 @@ def detail(session: str):
         row = c.execute("SELECT data FROM matches WHERE sid=?", (sid,)).fetchone()
         if row:
             data = complete_cached_ai(sid, json.loads(row["data"]), c)
+            if "kill_events" not in data and PARSER.exists() and HASHES.exists():
+                cached_files = sorted((REPLAYS / sid).glob("*.wrpl"))
+                if cached_files:
+                    try:
+                        data["kill_events"] = carve_local_replay(cached_files, data.get("players", []))
+                        c.execute("UPDATE matches SET data=? WHERE sid=?", (json.dumps(data, ensure_ascii=False), sid))
+                    except (subprocess.SubprocessError, ValueError):
+                        pass
             data["vehicle_note"] = "配置载具是玩家带入对局的阵容，不能证明每辆都实际出击。"
             for player in data.get("players", []):
                 for field in ("configured", "spawned"):
                     for item in player.get(field, []):
                         if item.get("code"):
                             item.update(vehicle(item["code"]))
-            return data
+            return add_battle_ratings(sid, data, c)
     files = download(sid)
-    return parse_replay(sid, files)
+    data = parse_replay(sid, files)
+    with db() as c:
+        return add_battle_ratings(sid, data, c)
