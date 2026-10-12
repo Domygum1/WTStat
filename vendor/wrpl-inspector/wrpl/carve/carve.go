@@ -48,6 +48,7 @@ type CarvedReplay struct {
 	ParserVersion map[string]string
 
 	CarveErrors []string
+	Results     map[string]any `json:"-"`
 }
 
 type SessionAward struct {
@@ -168,11 +169,18 @@ func CarveReplay(readers map[int]*wrpl.ReplayReader, ecsHashes packetecs2.Compon
 			ret.CarveErrors = append(ret.CarveErrors, fmt.Sprintf("parsing ECS packet %d: %s", ecsPacket.PacketSeq, messageErr))
 		}
 	}
+	if ecsp.IncompleteConstructions > 0 {
+		ret.CarveErrors = append(ret.CarveErrors, fmt.Sprintf("unsupported ECS construction layout (version 0x%X): %d incomplete entities; first: %s; actual vehicles and entity identities unavailable", ret.Version, ecsp.IncompleteConstructions, ecsp.FirstIncompleteConstruction))
+	}
 	results, err := wrpl.ParseBlk(readers[parts[len(parts)-1]].Results)
 	if err != nil {
 		ret.CarveErrors = append(ret.CarveErrors, fmt.Errorf("parsing results blk: %w", err).Error())
 	}
+	ret.Results = results
 	ret.GameDuration = getMapStringAnyValue(results, float64(-1), "timePlayed")
+	if seconds, ok := results["timePlayed"].(int64); ok {
+		ret.GameDuration = float64(seconds)
+	}
 	ret.Players, err = assemblePlayers(results, sltp.Players)
 	if err != nil {
 		ret.CarveErrors = append(ret.CarveErrors, fmt.Errorf("assembling players: %w", err).Error())

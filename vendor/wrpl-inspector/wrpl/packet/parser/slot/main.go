@@ -163,11 +163,12 @@ func (p *PacketSlotParser) Parse(pk *packet.Packet) (any, error) {
 		}
 		dc, err2 := zstd.NewReader(r) // 28b52ffd
 		if err2 != nil {
-			return nil, err
+			return nil, err2
 		}
+		defer dc.Close()
 		b, err2 := io.ReadAll(dc)
 		if err2 != nil {
-			return nil, err
+			return nil, err2
 		}
 		to_use = danet.NewBitReader(b)
 	} else {
@@ -284,6 +285,9 @@ const (
 )
 
 func (p *PacketSlotParser) ParseSlotMessage(index uint16, msg []byte) (any, error) {
+	if int(index) >= len(p.Players) {
+		return nil, fmt.Errorf("player slot %d is out of range", index)
+	}
 
 	r := danet.NewBitReader(msg)
 	plr := p.Players[index]

@@ -1,6 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+title WTStat QUERY - Port 8766
 if not exist ".venv\Scripts\python.exe" (
   python -m venv --without-pip .venv
   if errorlevel 1 goto :fail

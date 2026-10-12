@@ -74,12 +74,14 @@ type HashedComponent struct {
 }
 
 type PacketECSParser struct {
-	TemplateDefs    map[TemplateIdx]*Template
-	ComponentDefs   map[ComponentIdx]*HashedComponent
-	Messages        []ParsedPacketECS
-	InternedStrings map[uint16]string
-	Mgr             EntityManager
-	Maps            ComponentHashMaps
+	TemplateDefs                map[TemplateIdx]*Template
+	ComponentDefs               map[ComponentIdx]*HashedComponent
+	Messages                    []ParsedPacketECS
+	InternedStrings             map[uint16]string
+	Mgr                         EntityManager
+	Maps                        ComponentHashMaps
+	IncompleteConstructions     int
+	FirstIncompleteConstruction string
 }
 
 func NewPacketECSParser(m ComponentHashMaps) *PacketECSParser { // I removed parsers because that data will not change across iterations, so no need to reload it
@@ -91,6 +93,7 @@ func NewPacketECSParser(m ComponentHashMaps) *PacketECSParser { // I removed par
 		Mgr: EntityManager{
 			Entities:   map[uint32]*Entity{},
 			Uid_lookup: map[int32]*Entity{},
+			IDs:        map[uint32]EntityID{},
 		},
 		Maps: m,
 	}
@@ -268,9 +271,24 @@ func (p *PacketECSParser) ParseECSConstructMessage(r *danet.BitReader) (ret *Mes
 		return ret, fmt.Errorf("reading template: %w", err)
 	}
 	ret.Template = templ.ID
+	// In the sampled 0x18C1C server format a zero byte precedes the
+	// construction component count. Older blobs with only a zero count
+	// remain valid because they have no following byte.
+	if br.BitOffset/8 < len(ret.Data)-1 && ret.Data[br.BitOffset/8] == 0 {
+		br.IgnoreBytes(1)
+	}
 	entitiy, err := p.deserializeConstruction(br, templ)
 	if err != nil {
 		return ret, fmt.Errorf("parsing entity: %w", err)
+	}
+	// A zero component count is not success when most of the construction
+	// blob remains unread. Do not publish a partially decoded entity.
+	if remaining := len(ret.Data)*8 - br.BitOffset; remaining >= 8 {
+		p.IncompleteConstructions++
+		if p.FirstIncompleteConstruction == "" {
+			p.FirstIncompleteConstruction = fmt.Sprintf("template %d <%s>, %d unread bits", templ.ID, templ.Name, remaining)
+		}
+		return ret, nil
 	}
 	eid := EntityID(ret.EID)
 	p.Mgr.AddEntity(eid, entitiy)
@@ -321,6 +339,18 @@ func (p *PacketECSParser) Parse(pk *packet.Packet) (any, error) {
 				continue
 			}
 			dat.Messages = append(dat.Messages, msg)
+		}
+	} else if dat.Control == 0x26 {
+		count, err := r.ReadByte()
+		if err != nil {
+			return nil, fmt.Errorf("reading ECS destruction count: %w", err)
+		}
+		for range int(count) + 1 {
+			eid, err := packet.ReadEID(r)
+			if err != nil {
+				return nil, fmt.Errorf("reading ECS destruction EID: %w", err)
+			}
+			p.Mgr.RemoveEntity(EntityID(eid))
 		}
 	}
 	p.Messages = append(p.Messages, *dat)

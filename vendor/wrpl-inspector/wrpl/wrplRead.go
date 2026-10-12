@@ -139,7 +139,7 @@ func OpenPartedReplay(replayBytes [][]byte) (ret *ReplayReader, err error) {
 
 // OpenReplay reads header and conditionally settings, packets and resuls blobs
 //
-// If openPackets is true then Replay will have zlib-backed io that needs to be closed via Close
+// Packet streams may use zlib or zstd; callers must close the returned reader.
 func OpenReplay(r io.ReadSeeker, readSettings, openPackets, readResults bool) (ret *ReplayReader, err error) {
 	ret = &ReplayReader{}
 	err = binary.Read(r, binary.LittleEndian, &ret.Header)
@@ -148,6 +148,23 @@ func OpenReplay(r io.ReadSeeker, readSettings, openPackets, readResults bool) (r
 	}
 	if !bytes.Equal(ret.Header.Magic[:], []byte{0xe5, 0xac, 0x00, 0x10}) {
 		return nil, fmt.Errorf("wrong magic (got %v)", ret.Header.Magic)
+	}
+	// The on-disk header has 8 more reserved bytes than WRPLHeader models.
+	const headerSize int64 = 1234
+	packetStart := headerSize + int64(ret.Header.SettingsBLKSize)
+	fileEnd, err := r.Seek(0, io.SeekEnd)
+	if err != nil {
+		return nil, fmt.Errorf("finding replay length: %w", err)
+	}
+	packetEnd := fileEnd
+	if ret.Header.ResultsBlkOffset != 0 {
+		packetEnd = int64(ret.Header.ResultsBlkOffset)
+	}
+	if packetStart > packetEnd || packetEnd > fileEnd {
+		return nil, fmt.Errorf("invalid replay boundaries: packets %d..%d, file length %d", packetStart, packetEnd, fileEnd)
+	}
+	if _, err = r.Seek(headerSize, io.SeekStart); err != nil {
+		return nil, err
 	}
 
 	if ret.Header.SettingsBLKSize > 0 && readSettings {
@@ -170,18 +187,24 @@ func OpenReplay(r io.ReadSeeker, readSettings, openPackets, readResults bool) (r
 	}
 
 	if openPackets {
-		_, err := r.Seek(int64(ret.Header.SettingsBLKSize)+1234, io.SeekStart)
+		_, err := r.Seek(packetStart, io.SeekStart)
 		if err != nil {
 			return ret, fmt.Errorf("seeking for packets")
 		}
-		ret.PacketStream, err = zlib.NewReader(r)
+		// Results BLK is an uncompressed trailer, not another zstd frame.
+		// Limit both codecs, including parts that contain intermediate results.
+		ret.PacketStream, err = zlib.NewReader(io.LimitReader(r, packetEnd-packetStart))
 		if err != nil {
 			// Newer server replay parts use zstd frames for the packet stream.
-			_, err = r.Seek(int64(ret.Header.SettingsBLKSize)+1234, io.SeekStart)
-			if err != nil { return ret, fmt.Errorf("seeking for zstd packets: %w", err) }
-			dec, zerr := zstd.NewReader(r)
-			if zerr != nil { return ret, fmt.Errorf("opening packet stream as zlib or zstd: %w", zerr) }
-			ret.PacketStream = io.NopCloser(dec)
+			_, err = r.Seek(packetStart, io.SeekStart)
+			if err != nil {
+				return ret, fmt.Errorf("seeking for zstd packets: %w", err)
+			}
+			dec, zerr := zstd.NewReader(io.LimitReader(r, packetEnd-packetStart))
+			if zerr != nil {
+				return ret, fmt.Errorf("opening packet stream as zlib or zstd: %w", zerr)
+			}
+			ret.PacketStream = dec.IOReadCloser()
 		}
 	}
 

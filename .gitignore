@@ -8,6 +8,7 @@ cache/
 work/
 data/*
 !data/wiki_vehicles.csv
+!data/missile_names.csv
 config.local.json
 .env
 .env.*

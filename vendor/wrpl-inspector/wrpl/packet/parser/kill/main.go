@@ -42,6 +42,8 @@ type KillEntry struct {
 	ResolvedKillerPosition *game.SpaceTime
 
 	VictimPid              uint32
+	HasVictimPid           bool
+	DeathType              int32
 	VictimUid              uint16
 	HasVictimUid           bool
 	ResolvedVictim         *ecs2.Entity
@@ -192,10 +194,13 @@ func (p *PacketKillParser) Parse(pk *packet.Packet) (any, error) {
 					}
 				}
 			}
+		case 5:
+			parsed.HasVictimPid = true
+			return binary.Read(r, binary.LittleEndian, &parsed.VictimPid)
 		case 0xa:
 			return r.ReadLenStrInto(&parsed.PlayerWeapon)
 		case 0xb:
-			return binary.Read(r, binary.LittleEndian, &parsed.VictimPid)
+			return binary.Read(r, binary.LittleEndian, &parsed.DeathType)
 		case 0xc:
 			return r.ReadLenStrInto(&parsed.DestroyedWeapon)
 		default:

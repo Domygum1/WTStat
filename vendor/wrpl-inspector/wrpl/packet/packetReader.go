@@ -20,7 +20,6 @@ package packet
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 )
@@ -49,13 +48,16 @@ func (psr *PacketStreamReader) ReadPacket(pk *Packet) (isEOF bool, err error) {
 again:
 	packetSize, err := ReadVariableLengthSize(psr.R)
 	if err != nil {
-		if errors.Is(err, io.EOF) {
+		if err == io.EOF {
 			return true, nil
 		}
 		return false, fmt.Errorf("reading packet size: %w", err)
 	}
 	if packetSize == 0 {
 		goto again
+	}
+	if packetSize < 2 {
+		return false, fmt.Errorf("packet size %d is smaller than its header", packetSize)
 	}
 
 	psr.Header[0] = 0
@@ -70,6 +72,9 @@ again:
 		pk.PacketType = psr.Header[0] ^ 0b00010000
 		payloadSize = int(packetSize) - 2
 	} else {
+		if packetSize < 6 {
+			return false, fmt.Errorf("packet size %d is smaller than its timestamped header", packetSize)
+		}
 		pk.PacketType = psr.Header[0]
 		err = binary.Read(psr.R, binary.LittleEndian, &psr.T)
 		if err != nil {
@@ -79,6 +84,7 @@ again:
 	}
 	pk.CurrentTime = psr.T
 	if payloadSize == 0 {
+		pk.PacketPayload = pk.PacketPayload[:0]
 		return false, nil
 	}
 
