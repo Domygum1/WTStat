@@ -788,6 +788,30 @@ def carve_local_replay(files, players):
     return replay_kill_events(data, players), data.get("battle_log"), data.get("errors") or []
 
 
+ACTIVITY_FIELDS = ("kills", "groundKills", "humanKills", "deaths", "assists", "score",
+                   "aiKills", "aiGroundKills", "aiNavalKills", "captureZone", "teamKills")
+
+
+def has_activity(player):
+    return any(player.get(field) not in (None, 0, 0.0) for field in ACTIVITY_FIELDS)
+
+
+def is_unjoined_player(player):
+    return (player.get("team") not in (1, 2) and not player.get("configured")
+            and not player.get("spawned") and not has_activity(player))
+
+
+def has_participation_evidence(player):
+    return bool(player.get("configured") or player.get("spawned") or has_activity(player))
+
+
+def is_real_player(player):
+    uid = str(player.get("uid") or "")
+    name = player.get("name")
+    return (uid.isascii() and uid.isdecimal() and int(uid) > 0
+            and not (isinstance(name, str) and name.lower().startswith("coop/bot")))
+
+
 def parse_replay(sid, files, *, include_log=True, persist=True):
     if not PARSER.exists():
         raise HTTPException(500, "Go 解析器尚未构建。请运行 start.bat。")
@@ -818,6 +842,7 @@ def parse_replay(sid, files, *, include_log=True, persist=True):
                         "aiKills": p.get("aiKills"), "aiGroundKills": p.get("aiGroundKills"),
                         "aiNavalKills": p.get("aiNavalKills"), "captureZone": p.get("captureZone"),
                         "teamKills": p.get("teamKills")})
+    players = [player for player in players if not is_unjoined_player(player)]
     # The parser's entity reconstruction is version sensitive. Only publish a vehicle
     # as actually spawned if it is tied to the player's UID by an observed entity.
     kill_events, battle_log, battle_errors = None, None, None
@@ -958,7 +983,9 @@ def local_replay_metadata(sid):
 def add_battle_ratings(sid, data, connection):
     """Resolve match mode lazily, then calculate each configured lineup's exact max BR."""
     mode, group = data.get("game_mode"), data.get("battle_group")
-    changed = False
+    players = data.get("players") or []
+    data["players"] = [player for player in players if not is_unjoined_player(player)]
+    changed = len(data["players"]) != len(players)
     if not (mode and group):
         for row in connection.execute("SELECT data FROM pages WHERE query LIKE 'api:%' ORDER BY fetched DESC"):
             try:
@@ -1003,18 +1030,22 @@ def add_battle_ratings(sid, data, connection):
         ratings = [vehicle_battle_rating(item.get("code"), mode, group) for item in configured]
         player["max_br"] = max(ratings) if ratings and all(value is not None for value in ratings) else None
     players = data.get("players") or []
-    ratings = [player.get("max_br") for player in players]
+    participants = [player for player in players
+                    if is_real_player(player) and has_participation_evidence(player)]
+    ratings = [player.get("max_br") for player in participants]
     data["match_br"] = (max(ratings) if ratings and all(isinstance(br, (int, float)) for br in ratings)
                         else None)
     for player in players:
         player["squad_br"] = None
         player["squad_members"] = None
+        if not is_real_player(player) or not has_participation_evidence(player):
+            continue
         if player.get("auto_squad") is True:
             members = [player]
         elif player.get("auto_squad") is False:
             squad_id = player.get("squad_id")
             team = player.get("team")
-            members = ([other for other in players
+            members = ([other for other in participants
                         if other.get("team") == team and other.get("squad_id") == squad_id
                         and other.get("auto_squad") is False]
                        if squad_id is not None and team is not None else [player])
