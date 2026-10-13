@@ -56,10 +56,11 @@ func main() {
 			header = &h
 		}
 		if _, ok := data["header"]; !ok {
+			mode, group := replayModeAndGroup(r.Header)
 			data["header"] = map[string]any{
 				"session_id": r.Header.SessionHEX(), "start_time": r.Header.StartTime,
 				"level": string(r.Header.Raw_Level[:]), "location": string(r.Header.Raw_LocName[:]),
-				"version": r.Header.Version,
+				"version": r.Header.Version, "game_mode": mode, "battle_group": group,
 			}
 		}
 		if len(r.Results) > 0 && int(r.Header.ReplayPartNumber) >= resultsPart {

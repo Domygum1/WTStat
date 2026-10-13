@@ -34,3 +34,26 @@ func TestReportNullsAndExactVehicleMapping(t *testing.T) {
 		t.Fatal("checkpoint stats reported as final")
 	}
 }
+
+func TestReplayModeAndGroup(t *testing.T) {
+	for _, test := range []struct {
+		difficulty byte
+		mission    string
+		mode       any
+		group      any
+	}{
+		{117, "gamedata/missions/cta/tanks/falklands/conq1.blk", "realistic", "tank"},
+		{117, "gamedata/missions/cta/planes/historical/air.blk", "realistic", "aircraft"},
+		{186, "gamedata/missions/cta/planes/enduring/air.blk", "simulation", "aircraft"},
+		{0, "gamedata/missions/cta/tanks/arcade/map.blk", "arcade", "tank"},
+		{255, "gamedata/missions/other/map.blk", nil, nil},
+	} {
+		header := wrpl.WRPLHeader{Difficulty: test.difficulty}
+		copy(header.Raw_LevelSettings[:], test.mission)
+		mode, group := replayModeAndGroup(header)
+		if mode != test.mode || group != test.group {
+			t.Fatalf("difficulty %d mission %q: got (%v, %v), want (%v, %v)",
+				test.difficulty, test.mission, mode, group, test.mode, test.group)
+		}
+	}
+}

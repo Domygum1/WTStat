@@ -334,6 +334,50 @@ def cached_match_statuses(sids):
                   "replay": any((REPLAYS / sid).glob("*.wrpl"))} for sid in sids}
 
 
+@app.get("/api/cache")
+def list_match_cache():
+    """List every saved match, including stats-only and replay-only sessions."""
+    items = {}
+    with closing(db()) as connection:
+        for table, flag in (("matches", "detail"), ("match_stats", "stats")):
+            for row in connection.execute(f"SELECT sid, data, fetched FROM {table}"):
+                sid = row["sid"]
+                item = items.setdefault(sid, {"sid": sid, "detail": False,
+                                              "stats": False, "replay_parts": 0,
+                                              "start_utc": None, "map": None,
+                                              "game_mode": None, "battle_group": None,
+                                              "fetched": 0})
+                item[flag] = True
+                item["fetched"] = max(item["fetched"], row["fetched"] or 0)
+                try:
+                    data = json.loads(row["data"])
+                except (TypeError, ValueError):
+                    data = {}
+                if not isinstance(data, dict):
+                    data = {}
+                for key in ("start_utc", "map", "game_mode", "battle_group"):
+                    if not item[key] and data.get(key):
+                        item[key] = data[key]
+    if REPLAYS.is_dir():
+        for folder in REPLAYS.iterdir():
+            if not folder.is_dir() or folder.is_symlink() or not re.fullmatch(r"[0-9a-f]{16}", folder.name):
+                continue
+            parts = sum(1 for _ in folder.glob("*.wrpl"))
+            if not parts:
+                continue
+            item = items.setdefault(folder.name, {"sid": folder.name,
+                                                  "detail": False, "stats": False,
+                                                  "replay_parts": 0, "start_utc": None,
+                                                  "map": None, "game_mode": None,
+                                                  "battle_group": None, "fetched": 0})
+            item["replay_parts"] = parts
+    ordered = sorted(items.values(), key=lambda item: (
+        item["start_utc"] or "", item["fetched"], item["sid"]), reverse=True)
+    for item in ordered:
+        item.pop("fetched")
+    return {"items": ordered, "total": len(ordered)}
+
+
 @app.delete("/api/cache/{session}")
 def delete_match_cache(session: str):
     sid = normalize_sid(session)
@@ -755,7 +799,8 @@ def parse_replay(sid, files, *, include_log=True, persist=True):
     map_name = (catalog()[1].get(map_key) or {}).get("en") if map_key else None
     data = {"sid": sid, "start_utc": datetime.fromtimestamp(start, timezone.utc).isoformat() if start else None,
             "map": map_name or (header.get("location") or "").split("\0", 1)[0] or None,
-            "level": level,
+            "level": level, "game_mode": header.get("game_mode"),
+            "battle_group": header.get("battle_group"),
             "players": players, "source": "Replay 结算 BLK", "parts": len(files),
             "vehicle_note": "配置载具是玩家带入对局的阵容，不能证明每辆都实际出击。"}
     if kill_events is not None:
@@ -859,6 +904,24 @@ def vehicle_lineup_sort_key(item, mode, group):
             rating is None, -rating if rating is not None else 0)
 
 
+def local_replay_metadata(sid):
+    """Recover mode and vehicle group from a retained WRPL part's header."""
+    files = sorted((REPLAYS / sid).glob("*.wrpl"))
+    if not files or not PARSER.exists():
+        return None, None
+    try:
+        completed = subprocess.run([str(PARSER), str(files[0])], capture_output=True,
+                                   text=True, encoding="utf-8", errors="replace",
+                                   timeout=40, check=True)
+        header = json.loads(completed.stdout).get("header") or {}
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None, None
+    mode = header.get("game_mode")
+    group = header.get("battle_group")
+    return (mode if mode in {"arcade", "realistic", "simulation"} else None,
+            group if group in {"aircraft", "tank", "ship"} else None)
+
+
 def add_battle_ratings(sid, data, connection):
     """Resolve match mode lazily, then calculate each configured lineup's exact max BR."""
     mode, group = data.get("game_mode"), data.get("battle_group")
@@ -874,6 +937,10 @@ def add_battle_ratings(sid, data, connection):
                 mode = mode or found.get("game_mode")
                 group = group or found.get("vehicles")
                 break
+    if not (mode and group):
+        local_mode, local_group = local_replay_metadata(sid)
+        mode = mode or local_mode
+        group = group or local_group
     if not (mode and group) and cookie() and time.time() - data.get("metadata_checked_at", 0) > 86400:
         try:
             response = request(f"https://warthunder.com/en/api/replay/{int(sid, 16)}", auth=True)
@@ -893,7 +960,10 @@ def add_battle_ratings(sid, data, connection):
         data["game_mode"], data["battle_group"] = mode, group
         changed = True
     if changed:
-        connection.execute("UPDATE matches SET data=? WHERE sid=?", (json.dumps(data, ensure_ascii=False), sid))
+        payload = json.dumps(data, ensure_ascii=False)
+        cursor = connection.execute("UPDATE matches SET data=? WHERE sid=?", (payload, sid))
+        if not cursor.rowcount:
+            connection.execute("UPDATE match_stats SET data=? WHERE sid=?", (payload, sid))
     for player in data.get("players", []):
         configured = player.get("configured") or []
         configured.sort(key=lambda item: vehicle_lineup_sort_key(item, mode, group))

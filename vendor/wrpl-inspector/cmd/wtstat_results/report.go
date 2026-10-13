@@ -93,6 +93,30 @@ func nullableStat(n int) any {
 	return n
 }
 
+func replayModeAndGroup(h wrpl.WRPLHeader) (any, any) {
+	var mode, group any
+	switch (h.Difficulty >> 2) & 3 {
+	case 0:
+		mode = "arcade"
+	case 1:
+		mode = "realistic"
+	case 2:
+		mode = "simulation"
+	}
+	mission := strings.ToLower(strings.ReplaceAll(
+		strings.TrimRight(string(h.Raw_LevelSettings[:]), "\x00"), "\\", "/"))
+	switch {
+	case strings.Contains(mission, "/tanks/"):
+		group = "tank"
+	case strings.Contains(mission, "/planes/"):
+		group = "aircraft"
+	case strings.Contains(mission, "/ships/"), strings.Contains(mission, "/naval/"),
+		strings.Contains(mission, "/fleet/"), strings.Contains(mission, "/boats/"):
+		group = "ship"
+	}
+	return mode, group
+}
+
 func mapName(level string) any {
 	b, err := os.ReadFile(projectPath("vendor", "WT-Plotter", "resources", "translations", "locations.json"))
 	if err != nil {
