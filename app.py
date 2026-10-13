@@ -344,6 +344,7 @@ def list_match_cache():
                 sid = row["sid"]
                 item = items.setdefault(sid, {"sid": sid, "detail": False,
                                               "stats": False, "replay_parts": 0,
+                                              "expected_parts": None,
                                               "start_utc": None, "map": None,
                                               "game_mode": None, "battle_group": None,
                                               "fetched": 0})
@@ -355,6 +356,10 @@ def list_match_cache():
                     data = {}
                 if not isinstance(data, dict):
                     data = {}
+                if flag == "detail":
+                    count = data.get("parts")
+                    if isinstance(count, int) and not isinstance(count, bool) and 0 < count <= MAX_REPLAY_PARTS:
+                        item["expected_parts"] = count
                 for key in ("start_utc", "map", "game_mode", "battle_group"):
                     if not item[key] and data.get(key):
                         item[key] = data[key]
@@ -362,20 +367,48 @@ def list_match_cache():
         for folder in REPLAYS.iterdir():
             if not folder.is_dir() or folder.is_symlink() or not re.fullmatch(r"[0-9a-f]{16}", folder.name):
                 continue
-            parts = sum(1 for _ in folder.glob("*.wrpl"))
-            if not parts:
+            part_numbers = {int(path.stem) for path in folder.glob("*.wrpl")
+                            if re.fullmatch(r"\d{4}", path.stem)
+                            and path.is_file() and path.stat().st_size > 1234}
+            if not part_numbers:
                 continue
             item = items.setdefault(folder.name, {"sid": folder.name,
                                                   "detail": False, "stats": False,
-                                                  "replay_parts": 0, "start_utc": None,
+                                                  "replay_parts": 0, "expected_parts": None,
+                                                  "start_utc": None,
                                                   "map": None, "game_mode": None,
                                                   "battle_group": None, "fetched": 0})
-            item["replay_parts"] = parts
+            item["replay_parts"] = len(part_numbers)
+            item["_part_numbers"] = part_numbers
     ordered = sorted(items.values(), key=lambda item: (
         item["start_utc"] or "", item["fetched"], item["sid"]), reverse=True)
     for item in ordered:
         item.pop("fetched")
+        expected = item["expected_parts"]
+        numbers = item.pop("_part_numbers", set())
+        item["cache_level"] = ("complete" if item["detail"] and expected
+                               and numbers == set(range(expected)) else "partial")
     return {"items": ordered, "total": len(ordered)}
+
+
+@app.delete("/api/cache/selected")
+def delete_selected_match_cache(sessions: list[str] = Body(embed=True)):
+    if not sessions or len(sessions) > 5000:
+        raise HTTPException(400, "请选择 1–5000 场对局。")
+    sids = list(dict.fromkeys(normalize_sid(value) for value in sessions))
+    base = REPLAYS.resolve()
+    for sid in sids:
+        folder = REPLAYS / sid
+        if folder.is_symlink() or folder.resolve().parent != base:
+            raise HTTPException(400, "缓存路径无效。")
+    deleted, failed = [], []
+    for sid in sids:
+        try:
+            delete_match_cache(sid)
+            deleted.append(sid)
+        except HTTPException as error:
+            failed.append({"sid": sid, "reason": error.detail})
+    return {"deleted": deleted, "failed": failed}
 
 
 @app.delete("/api/cache/{session}")
