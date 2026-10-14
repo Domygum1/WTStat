@@ -104,43 +104,57 @@ def normalize_sid(value):
     raise HTTPException(400, "Session ID 必须是十进制或 16 位十六进制。")
 
 
+def replay_api_page(payload):
+    r = request("https://warthunder.com/en/api/replay", auth=True, method="POST", payload=payload)
+    try:
+        if r.status_code != 200:
+            raise HTTPException(r.status_code, f"官网搜索返回 HTTP {r.status_code}。")
+        if "application/json" not in r.headers.get("Content-Type", ""):
+            raise HTTPException(401, "官网未返回 Replay 数据；请更新 config.local.json 中的 identity_sid。")
+        raw = r.json()
+        if not isinstance(raw.get("items"), list) or not isinstance(raw.get("total_count"), int):
+            raise HTTPException(502, "官网 Replay 接口结构已变化。")
+        return raw
+    finally:
+        r.close()
+
+
 def site_page(query, page, kind="USERNAME"):
     cache_key = f"api:{kind}:{query}"
-    with db() as c:
+    with closing(db()) as c:
         row = c.execute("SELECT * FROM pages WHERE query=? AND page=?", (cache_key, page)).fetchone()
         if row and time.time() - row["fetched"] < 300:
-            return json.loads(row["data"])
+            cached = json.loads(row["data"])
+            if cached.get("total") != 0 or cached.get("verified_empty"):
+                return cached
     payload = {"gameMode": ["arcade", "realistic", "simulation"], "gameType": "randomBattle",
                "techType": "all", "findMissionValue": "", "findUserValue": query,
                "findUserType": kind, "isUserOwnReplays": False, "rankRange": "",
                "timeRangeFrom": "", "timeRangeTo": "", "limit": 15, "page": page}
-    r = request("https://warthunder.com/en/api/replay", auth=True, method="POST", payload=payload)
-    try:
-        if "application/json" not in r.headers.get("Content-Type", ""):
-            raise HTTPException(401, "官网未返回 Replay 数据；请更新 config.local.json 中的 identity_sid。")
-        if r.status_code != 200:
-            raise HTTPException(r.status_code, f"官网搜索返回 HTTP {r.status_code}。")
-        raw = r.json()
-        if not isinstance(raw.get("items"), list) or "total_count" not in raw:
-            raise HTTPException(502, "官网 Replay 接口结构已变化。")
-        items = []
-        for entry in raw["items"]:
-            try:
-                sid = normalize_sid(str(entry["sessionId"]))
-            except (KeyError, HTTPException):
-                continue
-            timestamp = entry.get("startTime")
-            when = datetime.fromtimestamp(timestamp, timezone.utc).strftime("%Y-%m-%d %H:%M UTC") if isinstance(timestamp, (int, float)) else None
-            duration = (entry.get("endTime") or 0) - timestamp if isinstance(timestamp, (int, float)) else None
-            items.append({"sid": sid, "title": entry.get("title"), "date_text": when,
-                          "map": entry.get("missionName"), "game_type": entry.get("gameType"),
-                          "game_mode": entry.get("gameMode"), "vehicles": entry.get("statisticGroup"),
-                          "duration": f"{duration // 60} min" if duration and duration > 0 else None})
-        result = {"items": items, "total": int(raw["total_count"])}
-    finally:
-        r.close()
-    with db() as c:
+    raw = replay_api_page(payload)
+    if page == 1 and raw["total_count"] == 0:
+        if not query or replay_api_page({**payload, "findUserValue": "",
+                                         "findUserType": "USERNAME"})["total_count"] == 0:
+            raise HTTPException(502, "官网无筛选回放列表也返回 0 场；identity_sid 可能已过期或官网暂时异常。请重新登录官网并更新 config.local.json 后重试。")
+    items = []
+    for entry in raw["items"]:
+        try:
+            sid = normalize_sid(str(entry["sessionId"]))
+        except (KeyError, HTTPException):
+            continue
+        timestamp = entry.get("startTime")
+        when = datetime.fromtimestamp(timestamp, timezone.utc).strftime("%Y-%m-%d %H:%M UTC") if isinstance(timestamp, (int, float)) else None
+        duration = (entry.get("endTime") or 0) - timestamp if isinstance(timestamp, (int, float)) else None
+        items.append({"sid": sid, "title": entry.get("title"), "date_text": when,
+                      "map": entry.get("missionName"), "game_type": entry.get("gameType"),
+                      "game_mode": entry.get("gameMode"), "vehicles": entry.get("statisticGroup"),
+                      "duration": f"{duration // 60} min" if duration and duration > 0 else None})
+    result = {"items": items, "total": raw["total_count"]}
+    if page == 1 and result["total"] == 0:
+        result["verified_empty"] = True
+    with closing(db()) as c:
         c.execute("REPLACE INTO pages VALUES (?,?,?,?)", (cache_key, page, time.time(), json.dumps(result)))
+        c.commit()
     return result
 
 
