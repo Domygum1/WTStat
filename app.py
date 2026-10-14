@@ -812,6 +812,98 @@ def is_real_player(player):
             and not (isinstance(name, str) and name.lower().startswith("coop/bot")))
 
 
+def recover_saved_lineups(sid, players, files):
+    """Use earlier results snapshots when final matchingInfo omits an active player."""
+    missing = {str(player["uid"]): player for player in players
+               if is_real_player(player) and has_activity(player) and not player.get("configured")}
+    changed = False
+    earlier_files = files[:-1]
+    ordered = [path for path in earlier_files if path.name == "0001.wrpl"]
+    ordered.extend(path for path in reversed(earlier_files) if path.name != "0001.wrpl")
+    for earlier in ordered:
+        if not missing:
+            break
+        try:
+            snapshot = json.loads(subprocess.run(
+                [str(PARSER), str(earlier)], capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=40, check=True).stdout)
+        except (OSError, subprocess.SubprocessError, ValueError):
+            continue
+        if (snapshot.get("header") or {}).get("session_id") != sid:
+            continue
+        matching = ((snapshot.get("results") or {}).get("matchingInfo") or {})
+        for uid, player in tuple(missing.items()):
+            crafts = (matching.get(uid) or {}).get("crafts_info") or {}
+            configured = [vehicle(craft["name"]) for key, craft in sorted(
+                crafts.items(), key=lambda item: int(item[0][5:])
+                if re.fullmatch(r"array\d+", item[0]) else 9999)
+                          if isinstance(craft, dict) and craft.get("name")]
+            if configured:
+                player["configured"] = configured
+                missing.pop(uid)
+                changed = True
+    return changed
+
+
+def missing_active_lineups(players):
+    return any(is_real_player(player) and has_activity(player)
+               and not player.get("configured") for player in players)
+
+
+def download_early_part(sid):
+    """Fetch 0001 only when a result snapshot needs a missing lineup."""
+    path = REPLAYS / sid / "0001.wrpl"
+    if path.exists() and path.stat().st_size > 1234:
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    response = request(f"{FILES}/{sid}/0001.wrpl", stream=True)
+    try:
+        if response.status_code != 200:
+            raise HTTPException(response.status_code, "Replay 第 0001 段不可用。")
+        temp = path.with_suffix(".part")
+        size = 0
+        try:
+            with temp.open("wb") as target:
+                for chunk in response.iter_content(131072):
+                    size += len(chunk)
+                    if size > 100_000_000:
+                        raise HTTPException(502, "Replay 分段超过 100 MB 上限。")
+                    target.write(chunk)
+            if size < 1234:
+                raise HTTPException(502, "Replay 第 0001 段不完整。")
+            temp.replace(path)
+        except Exception:
+            temp.unlink(missing_ok=True)
+            raise
+    finally:
+        response.close()
+    return path
+
+
+def recover_missing_lineups(sid, players):
+    """Try the early result, then all segments if active humans still lack lineups."""
+    if not missing_active_lineups(players):
+        return False
+    files = sorted((REPLAYS / sid).glob("*.wrpl"))
+    changed = len(files) > 1 and recover_saved_lineups(sid, players, files)
+    if not missing_active_lineups(players):
+        return changed
+    if not any(path.name == "0001.wrpl" for path in files):
+        try:
+            download_early_part(sid)
+            files = sorted((REPLAYS / sid).glob("*.wrpl"))
+            changed = recover_saved_lineups(sid, players, files) or changed
+        except (HTTPException, requests.RequestException):
+            pass
+    if missing_active_lineups(players):
+        try:
+            files = download(sid)
+            changed = recover_saved_lineups(sid, players, files) or changed
+        except (HTTPException, requests.RequestException):
+            pass
+    return changed
+
+
 def parse_replay(sid, files, *, include_log=True, persist=True):
     if not PARSER.exists():
         raise HTTPException(500, "Go 解析器尚未构建。请运行 start.bat。")
@@ -843,6 +935,7 @@ def parse_replay(sid, files, *, include_log=True, persist=True):
                         "aiNavalKills": p.get("aiNavalKills"), "captureZone": p.get("captureZone"),
                         "teamKills": p.get("teamKills")})
     players = [player for player in players if not is_unjoined_player(player)]
+    recover_saved_lineups(sid, players, files)
     # The parser's entity reconstruction is version sensitive. Only publish a vehicle
     # as actually spawned if it is tied to the player's UID by an observed entity.
     kill_events, battle_log, battle_errors = None, None, None
@@ -986,6 +1079,8 @@ def add_battle_ratings(sid, data, connection):
     players = data.get("players") or []
     data["players"] = [player for player in players if not is_unjoined_player(player)]
     changed = len(data["players"]) != len(players)
+    if recover_missing_lineups(sid, data["players"]):
+        changed = True
     if not (mode and group):
         for row in connection.execute("SELECT data FROM pages WHERE query LIKE 'api:%' ORDER BY fetched DESC"):
             try:
