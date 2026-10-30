@@ -166,8 +166,8 @@ main{max-width:1180px;margin:auto;padding:24px}section{background:#1b2430;border
     const heading = `${title} · ${layout.rows.length} 人`;
     ctx.fillText(heading, x + 30, y + 44);
     let flagX = x + 46 + ctx.measureText(heading).width;
-    for (const row of layout.rows) {
-      const image = flagImages.get(row.flagCode);
+    for (const code of new Set(layout.rows.map(row => row.flagCode).filter(Boolean))) {
+      const image = flagImages.get(code);
       if (image) {
         drawFlag(ctx, image, flagX, y + 26, 28, 19);
         flagX += 32;
@@ -314,7 +314,7 @@ function vehicleCells(items){return items?.length?items.map(x=>x.code?`<a class=
 function lineupCountry(player){const countries=[...new Set((player.configured||[]).map(x=>x.country).filter(x=>x&&x!=='N/A'))];return countries.length===1?countries[0]:null}
 const FLAG_CODES={'美国':'us','德国':'de','苏联':'su','英国':'gb','日本':'jp','意大利':'it','法国':'fr','瑞典':'se','中国':'cn','以色列':'il'};
 function countryFlag(player){const country=lineupCountry(player),code=FLAG_CODES[country];return code?`<img class="country-flag" src="/flags/${code}.svg" alt="${esc(country)}" title="${esc(country)}">`:v(country)}
-function teamFlags(players){return players.map(player=>{const country=lineupCountry(player),code=FLAG_CODES[country];return code?`<img class="country-flag" src="/flags/${code}.svg" alt="${esc(country)}" title="${esc(player.name)} · ${esc(country)}">`:''}).join('')}
+function teamFlags(players){return [...new Set(players.map(lineupCountry).filter(country=>FLAG_CODES[country]))].map(country=>`<img class="country-flag" src="/flags/${FLAG_CODES[country]}.svg" alt="${esc(country)}" title="${esc(country)}">`).join('')}
 function aiDisplay(p){const values=[p.aiKills,p.aiGroundKills,p.aiNavalKills];if(values.some(x=>x===null||x===undefined||x===''))return 'AI N/A';const counts=values.map(Number);if(counts.some(x=>!Number.isFinite(x)))return 'AI N/A';const total=counts.reduce((a,b)=>a+b,0),parts=['空中','地面','海上'].map((name,i)=>counts[i]>0?`${name} ${counts[i]}`:null).filter(Boolean);return `AI ${total}${parts.length?`（${parts.join(' · ')}）`:''}`}
 function sortPlayers(players,key,direction){if(!key)return players;return players.map((player,index)=>({player,index})).sort((a,b)=>{if(key==='country'){const ac=lineupCountry(a.player),bc=lineupCountry(b.player);if(!ac||!bc)return ac? -1:bc?1:a.index-b.index;return ac.localeCompare(bc,'zh-CN')*direction||a.index-b.index}const av=Number(a.player[key]),bv=Number(b.player[key]);const am=a.player[key]===null||a.player[key]===undefined||!Number.isFinite(av),bm=b.player[key]===null||b.player[key]===undefined||!Number.isFinite(bv);if(am!==bm)return am?1:-1;return (am?0:(av-bv)*direction)||a.index-b.index}).map(x=>x.player)}
 const GROUP_LABELS={aircraft:'空战',aviation:'空战',air:'空战',tank:'陆战',ground:'陆战',ground_vehicles:'陆战',ship:'海战',ships:'海战',fleet:'海战',naval:'海战',boat:'海战'};
