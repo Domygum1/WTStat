@@ -18,6 +18,7 @@ main{max-width:1180px;margin:auto;padding:24px}section{background:#1b2430;border
 .kill-events{margin-top:20px;border:1px solid #405063;border-radius:9px;background:#172330}.kill-events summary{padding:13px 16px;cursor:pointer;color:#e5edf5;font-weight:700}.kill-events summary:hover{color:#ffd076}.kill-events .kill-content{padding:0 16px 16px;overflow-x:auto}.kill-events table{min-width:620px}.kill-events .muted{margin:2px 0 10px}
 .kill-events .log-controls{display:flex;align-items:end;gap:12px;flex-wrap:wrap;margin:0 0 12px}.kill-events .log-controls label{margin:0}.kill-events .log-controls select{display:block;margin-top:5px;background:#111821;color:#f5f7fa;border:1px solid #435366;border-radius:7px;padding:8px;font:inherit}.kill-events .log-controls button{padding:9px 13px}
 .team h3{padding:9px 12px;border-left:3px solid #60768a;border-radius:5px;background:#202d3a}.team-blue h3{color:#9bc8ee;border-left-color:#699dc9;background:#1d3042}.team-red h3{color:#efaaa6;border-left-color:#c47c7a;background:#34282f}.kill-events .team-name{font-weight:600}.kill-events .team-name.blue{color:#9bc8ee}.kill-events .team-name.red{color:#efaaa6}
+.team h3{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.team-flags{display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap}.team-flags .country-flag{margin:0}
 .kill-events .vehicle-after-name{color:#aebdcb;font-family:WTSymbols,Inter,"Segoe UI","Microsoft YaHei",sans-serif;font-size:13px;white-space:nowrap}
 .cache-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.cache-toolbar h2{margin:0}.cache-toggle{background:#344c63;color:#eaf3fb}.cache-toggle:hover{background:#466883}.cached-list{max-height:60vh;overflow-y:auto;margin-top:14px}.cached-list .match{grid-template-columns:180px 1fr auto}.cached-list .match small{display:block;color:#aeb9c6;margin-top:5px}.cached-list .cache-delete{min-height:64px}.cache-empty{margin:14px 0 0}@media(max-width:720px){.cached-list .match{grid-template-columns:1fr}}
 .cache-bulk-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.cache-select-label{display:flex;align-items:center;gap:7px;color:#d5e2ec;font-size:14px;cursor:pointer}.cache-select-label input,.cache-row-select{width:19px;height:19px;margin:0;padding:0;appearance:auto;accent-color:#f2b84b;cursor:pointer}.cache-row-select{flex:none;align-self:center;margin:0 4px 0 2px}.cache-filter{margin-top:14px}.cache-filter label{display:inline-block;margin:0}.cache-filter select{display:block;margin-top:5px;padding:8px 11px;background:#111821;color:#f5f7fa;border:1px solid #435366;border-radius:7px;font:inherit}.cache-clear-all:disabled{opacity:.5}
@@ -37,6 +38,8 @@ main{max-width:1180px;margin:auto;padding:24px}section{background:#1b2430;border
   const GAP = 24;
   const PANEL_WIDTH = (WIDTH - MARGIN * 2 - GAP) / 2;
   const FONT = '"Microsoft YaHei", "Segoe UI", sans-serif';
+  const FLAG_CODES = { '美国': 'us', '德国': 'de', '苏联': 'su', '英国': 'gb', '日本': 'jp',
+    '意大利': 'it', '法国': 'fr', '瑞典': 'se', '中国': 'cn', '以色列': 'il' };
   const COLORS = {
     background: '#101821', panel: '#1b2836', card: '#162330', line: '#34485c',
     text: '#eef4fa', muted: '#b2c4d3', blue: '#91c7f4', red: '#f2a6a5',
@@ -55,6 +58,29 @@ main{max-width:1180px;margin:auto;padding:24px}section{background:#1b2430;border
   function country(player) {
     const countries = [...new Set((player.configured || []).map(item => item.country).filter(item => item && item !== 'N/A'))];
     return countries.length === 1 ? countries[0] : 'N/A';
+  }
+
+  function flagCode(player) { return FLAG_CODES[country(player)] || null; }
+
+  function loadFlag(code) {
+    return new Promise(resolve => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => resolve(null);
+      image.src = `/flags/${code}.svg`;
+    });
+  }
+
+  async function loadFlags(players) {
+    const codes = [...new Set(players.map(flagCode).filter(Boolean))];
+    return new Map(await Promise.all(codes.map(async code => [code, await loadFlag(code)])));
+  }
+
+  function drawFlag(ctx, image, x, y, width, height) {
+    ctx.drawImage(image, x, y, width, height);
+    ctx.strokeStyle = COLORS.line;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x, y, width, height);
   }
 
   function aiText(player) {
@@ -106,7 +132,7 @@ main{max-width:1180px;margin:auto;padding:24px}section{background:#1b2430;border
   function playerLayout(ctx, player) {
     const contentWidth = PANEL_WIDTH - 64;
     ctx.font = `700 22px ${FONT}`;
-    const name = wrap(ctx, `${value(player.name)}  ·  ${country(player)}`, contentWidth - 145);
+    const name = wrap(ctx, value(player.name), contentWidth - 210);
     ctx.font = `19px ${FONT}`;
     const vehicles = wrap(ctx, `载具  ${(player.configured || []).map(item => value(item.name)).join(' · ') || 'N/A'}`, contentWidth);
     ctx.font = `18px ${FONT}`;
@@ -114,7 +140,7 @@ main{max-width:1180px;margin:auto;padding:24px}section{background:#1b2430;border
     ctx.font = `17px ${FONT}`;
     const other = wrap(ctx, `UID ${value(player.uid)}   ·   ${aiText(player)}   ·   占点 ${value(player.captureZone)}   ·   击杀队友 ${value(player.teamKills)}`, contentWidth);
     const height = 20 + name.length * 29 + 7 + vehicles.length * 25 + 7 + stats.length * 24 + 5 + other.length * 23 + 17;
-    return { player, name, vehicles, stats, other, height };
+    return { player, name, vehicles, stats, other, height, flagCode: flagCode(player) };
   }
 
   function teamLayout(ctx, team, players) {
@@ -128,7 +154,7 @@ main{max-width:1180px;margin:auto;padding:24px}section{background:#1b2430;border
     return { team, rows, height: 70 + (rows.length ? rows.reduce((sum, row) => sum + row.height + 8, 0) : 66) + 12 };
   }
 
-  function drawTeam(ctx, layout, x, y, highlightUid) {
+  function drawTeam(ctx, layout, x, y, highlightUid, flagImages) {
     const blue = String(layout.team) === '1';
     const red = String(layout.team) === '2';
     const accent = blue ? COLORS.blue : red ? COLORS.red : COLORS.muted;
@@ -137,7 +163,16 @@ main{max-width:1180px;margin:auto;padding:24px}section{background:#1b2430;border
     roundRect(ctx, x + 12, y + 12, PANEL_WIDTH - 24, 48, 8, blue ? '#203d54' : red ? '#4a3039' : '#344456');
     ctx.font = `700 25px ${FONT}`;
     ctx.fillStyle = accent;
-    ctx.fillText(`${title} · ${layout.rows.length} 人`, x + 30, y + 44);
+    const heading = `${title} · ${layout.rows.length} 人`;
+    ctx.fillText(heading, x + 30, y + 44);
+    let flagX = x + 46 + ctx.measureText(heading).width;
+    for (const row of layout.rows) {
+      const image = flagImages.get(row.flagCode);
+      if (image) {
+        drawFlag(ctx, image, flagX, y + 26, 28, 19);
+        flagX += 32;
+      }
+    }
     let rowY = y + 70;
     if (!layout.rows.length) {
       ctx.font = `20px ${FONT}`;
@@ -152,6 +187,16 @@ main{max-width:1180px;margin:auto;padding:24px}section{background:#1b2430;border
       let textY = rowY + 29;
       ctx.font = `700 22px ${FONT}`;
       textY = drawLines(ctx, row.name, left, textY, 29, selected ? COLORS.gold : COLORS.text);
+      const separatorX = left + ctx.measureText(row.name[row.name.length - 1]).width + 9;
+      const nameBaseline = rowY + 29 + (row.name.length - 1) * 29;
+      ctx.fillText('·', separatorX, nameBaseline);
+      const flag = flagImages.get(row.flagCode);
+      if (flag) drawFlag(ctx, flag, separatorX + 19, nameBaseline - 18, 34, 23);
+      else {
+        ctx.font = `16px ${FONT}`;
+        ctx.fillStyle = COLORS.muted;
+        ctx.fillText('N/A', separatorX + 19, nameBaseline);
+      }
       ctx.font = `700 22px ${FONT}`;
       ctx.fillStyle = selected ? COLORS.gold : accent;
       ctx.textAlign = 'right';
@@ -176,7 +221,8 @@ main{max-width:1180px;margin:auto;padding:24px}section{background:#1b2430;border
     return { label, lines };
   }
 
-  function render(data, highlightUid = null) {
+  async function render(data, highlightUid = null) {
+    const flagImages = await loadFlags(data.players || []);
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('浏览器无法创建图片画布。');
@@ -238,8 +284,8 @@ main{max-width:1180px;margin:auto;padding:24px}section{background:#1b2430;border
     ctx.fillStyle = COLORS.muted;
     ctx.fillText(`官网对局页  https://warthunder.com/en/tournament/replay/${BigInt(`0x${data.sid}`)}`, MARGIN, metaY + 25);
     for (const row of teamRows) {
-      drawTeam(ctx, teams[row.index], MARGIN, row.y, highlightUid);
-      if (teams[row.index + 1]) drawTeam(ctx, teams[row.index + 1], MARGIN + PANEL_WIDTH + GAP, row.y, highlightUid);
+      drawTeam(ctx, teams[row.index], MARGIN, row.y, highlightUid, flagImages);
+      if (teams[row.index + 1]) drawTeam(ctx, teams[row.index + 1], MARGIN + PANEL_WIDTH + GAP, row.y, highlightUid, flagImages);
     }
     return canvas;
   }
@@ -268,6 +314,7 @@ function vehicleCells(items){return items?.length?items.map(x=>x.code?`<a class=
 function lineupCountry(player){const countries=[...new Set((player.configured||[]).map(x=>x.country).filter(x=>x&&x!=='N/A'))];return countries.length===1?countries[0]:null}
 const FLAG_CODES={'美国':'us','德国':'de','苏联':'su','英国':'gb','日本':'jp','意大利':'it','法国':'fr','瑞典':'se','中国':'cn','以色列':'il'};
 function countryFlag(player){const country=lineupCountry(player),code=FLAG_CODES[country];return code?`<img class="country-flag" src="/flags/${code}.svg" alt="${esc(country)}" title="${esc(country)}">`:v(country)}
+function teamFlags(players){return players.map(player=>{const country=lineupCountry(player),code=FLAG_CODES[country];return code?`<img class="country-flag" src="/flags/${code}.svg" alt="${esc(country)}" title="${esc(player.name)} · ${esc(country)}">`:''}).join('')}
 function aiDisplay(p){const values=[p.aiKills,p.aiGroundKills,p.aiNavalKills];if(values.some(x=>x===null||x===undefined||x===''))return 'AI N/A';const counts=values.map(Number);if(counts.some(x=>!Number.isFinite(x)))return 'AI N/A';const total=counts.reduce((a,b)=>a+b,0),parts=['空中','地面','海上'].map((name,i)=>counts[i]>0?`${name} ${counts[i]}`:null).filter(Boolean);return `AI ${total}${parts.length?`（${parts.join(' · ')}）`:''}`}
 function sortPlayers(players,key,direction){if(!key)return players;return players.map((player,index)=>({player,index})).sort((a,b)=>{if(key==='country'){const ac=lineupCountry(a.player),bc=lineupCountry(b.player);if(!ac||!bc)return ac? -1:bc?1:a.index-b.index;return ac.localeCompare(bc,'zh-CN')*direction||a.index-b.index}const av=Number(a.player[key]),bv=Number(b.player[key]);const am=a.player[key]===null||a.player[key]===undefined||!Number.isFinite(av),bm=b.player[key]===null||b.player[key]===undefined||!Number.isFinite(bv);if(am!==bm)return am?1:-1;return (am?0:(av-bv)*direction)||a.index-b.index}).map(x=>x.player)}
 const GROUP_LABELS={aircraft:'空战',aviation:'空战',air:'空战',tank:'陆战',ground:'陆战',ground_vehicles:'陆战',ship:'海战',ships:'海战',fleet:'海战',naval:'海战',boat:'海战'};
@@ -278,7 +325,7 @@ function playerRows(players){return players.map(p=>`<tr class="${p===highlighted
 function teamColor(team){return String(team)==='1'?'blue':String(team)==='2'?'red':''}
 function battlePlayer(name,uid,teams,vehicleName,vehicleCode){const color=name&&name!=='—'?teams.get(String(uid))||'':'';const player=`<span${color?` class="team-name ${color}"`:''}>${v(name)}</span>`;if(!uid||!name||name==='—')return player;return `${player}<span class="vehicle-after-name"${vehicleCode?` title="载具代码：${esc(vehicleCode)}"`:''}>（${v(vehicleName)}）</span>`}
 function eventVehicleName(name,model,vehicles){if(name)return name;if(!model)return null;const code=model.startsWith('tankModels/')?model.slice(11):model;return vehicles.get(code)||code}
-function table(team,players,index){const sortHead=(key,label)=>`<th data-stat="${key}" aria-sort="none"><button type="button" class="sort-button" data-team-index="${index}" data-sort-key="${key}" title="点击排序，再次点击切换方向">${label}<span class="sort-indicator"></span></button></th>`;const color=teamColor(team),name=color==='blue'?'蓝队':color==='red'?'红队':`队伍 ${esc(team)}`;return `<div class="team${color?` team-${color}`:''}"><h3>${name} · ${players.length} 人</h3><table><thead><tr><th>玩家</th>${sortHead('country','队列国籍')}${sortHead('max_br','权重')}<th title="陆战、空战、直升机、海战；同类按本局权重从高到低">载具</th>${sortHead('kills','空中击杀')}${sortHead('groundKills','地面击杀')}${sortHead('deaths','死亡')}${sortHead('assists','助攻')}${sortHead('score','得分')}<th>其他</th></tr></thead><tbody id="team-rows-${index}">${playerRows(players)}</tbody></table></div>`}
+function table(team,players,index){const sortHead=(key,label)=>`<th data-stat="${key}" aria-sort="none"><button type="button" class="sort-button" data-team-index="${index}" data-sort-key="${key}" title="点击排序，再次点击切换方向">${label}<span class="sort-indicator"></span></button></th>`;const color=teamColor(team),name=color==='blue'?'蓝队':color==='red'?'红队':`队伍 ${esc(team)}`;return `<div class="team${color?` team-${color}`:''}"><h3><span>${name} · ${players.length} 人</span><span class="team-flags" aria-label="队伍玩家的国旗">${teamFlags(players)}</span></h3><table><thead><tr><th>玩家</th>${sortHead('country','队列国籍')}${sortHead('max_br','权重')}<th title="陆战、空战、直升机、海战；同类按本局权重从高到低">载具</th>${sortHead('kills','空中击杀')}${sortHead('groundKills','地面击杀')}${sortHead('deaths','死亡')}${sortHead('assists','助攻')}${sortHead('score','得分')}<th>其他</th></tr></thead><tbody id="team-rows-${index}">${playerRows(players)}</tbody></table></div>`}
 function battleLogHtml(log,kills,errors,players=[]){
   const teams=new Map(players.filter(p=>p.uid!==null&&p.uid!==undefined).map(p=>[String(p.uid),teamColor(p.team)]));
   const vehicles=new Map(players.flatMap(p=>(p.configured||[]).filter(item=>item.code&&item.name).map(item=>[item.code,item.name])));
@@ -312,8 +359,10 @@ async function saveBattleImage(){
   const button=$('#saveBattleImage'),status=$('#imageStatus');
   button.disabled=true;status.className='notice';status.textContent='正在生成战局图片…';
   try{
-    const canvas=window.WTStatBattleImage.render(activeDetailData,highlightedPlayer?.uid===null||highlightedPlayer?.uid===undefined?null:String(highlightedPlayer.uid));
-    const png=new Promise((resolve,reject)=>canvas.toBlob(value=>value?resolve(value):reject(Error('图片过大，浏览器无法导出 PNG。')),'image/png'));
+    const png=(async()=>{
+      const canvas=await window.WTStatBattleImage.render(activeDetailData,highlightedPlayer?.uid===null||highlightedPlayer?.uid===undefined?null:String(highlightedPlayer.uid));
+      return new Promise((resolve,reject)=>canvas.toBlob(value=>value?resolve(value):reject(Error('图片过大，浏览器无法导出 PNG。')),'image/png'));
+    })();
     const canCopy=!!navigator.clipboard?.write&&typeof ClipboardItem!=='undefined';
     let copyResult=null;
     if(canCopy){
