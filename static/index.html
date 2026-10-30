@@ -131,27 +131,28 @@ main{max-width:1180px;margin:auto;padding:24px}section{background:#1b2430;border
 
   function playerLayout(ctx, player) {
     const contentWidth = PANEL_WIDTH - 64;
-    ctx.font = `700 22px ${FONT}`;
+    ctx.font = `700 30px ${FONT}`;
     const name = wrap(ctx, value(player.name), contentWidth - 210);
-    ctx.font = `19px ${FONT}`;
-    const vehicles = wrap(ctx, `载具  ${(player.configured || []).map(item => value(item.name)).join(' · ') || 'N/A'}`, contentWidth);
     ctx.font = `18px ${FONT}`;
-    const stats = wrap(ctx, `空中击杀 ${value(player.kills)}   地面击杀 ${value(player.groundKills)}   死亡 ${value(player.deaths)}   助攻 ${value(player.assists)}   得分 ${value(player.score)}`, contentWidth);
-    ctx.font = `17px ${FONT}`;
-    const other = wrap(ctx, `UID ${value(player.uid)}   ·   ${aiText(player)}   ·   占点 ${value(player.captureZone)}   ·   击杀队友 ${value(player.teamKills)}`, contentWidth);
-    const height = 20 + name.length * 29 + 7 + vehicles.length * 25 + 7 + stats.length * 24 + 5 + other.length * 23 + 17;
-    return { player, name, vehicles, stats, other, height, flagCode: flagCode(player) };
+    const vehicles = wrap(ctx, `载具  ${(player.configured || []).map(item => value(item.name)).join(' · ') || 'N/A'}`, contentWidth);
+    ctx.font = `16px ${FONT}`;
+    const other = wrap(ctx, `助攻 ${value(player.assists)}   ·   UID ${value(player.uid)}   ·   ${aiText(player)}   ·   占点 ${value(player.captureZone)}   ·   击杀队友 ${value(player.teamKills)}`, contentWidth);
+    const metricsOffset = 24 + name.length * 38;
+    const height = metricsOffset + 62 + 12 + 18 + vehicles.length * 24 + 5 + other.length * 22 + 5;
+    return { player, name, vehicles, other, height, metricsOffset, flagCode: flagCode(player) };
   }
 
   function teamLayout(ctx, team, players) {
     const sorted = players.map((player, index) => ({ player, index })).sort((a, b) => {
-      const aBr = Number(a.player.max_br), bBr = Number(b.player.max_br);
-      const aMissing = a.player.max_br === null || a.player.max_br === undefined || !Number.isFinite(aBr);
-      const bMissing = b.player.max_br === null || b.player.max_br === undefined || !Number.isFinite(bBr);
-      return aMissing !== bMissing ? (aMissing ? 1 : -1) : aMissing ? a.index - b.index : bBr - aBr || a.index - b.index;
+      const aScore = Number(a.player.score), bScore = Number(b.player.score);
+      const aMissing = a.player.score === null || a.player.score === undefined || a.player.score === '' || !Number.isFinite(aScore);
+      const bMissing = b.player.score === null || b.player.score === undefined || b.player.score === '' || !Number.isFinite(bScore);
+      return aMissing !== bMissing ? (aMissing ? 1 : -1) : aMissing ? a.index - b.index : bScore - aScore || a.index - b.index;
     }).map(item => item.player);
     const rows = sorted.map(player => playerLayout(ctx, player));
-    return { team, rows, height: 70 + (rows.length ? rows.reduce((sum, row) => sum + row.height + 8, 0) : 66) + 12 };
+    const ratings = players.map(player => player.max_br).filter(br => br !== null && br !== undefined && br !== '' && Number.isFinite(Number(br))).map(Number);
+    return { team, rows, maxBr: ratings.length ? Math.max(...ratings) : null,
+      height: 80 + (rows.length ? rows.reduce((sum, row) => sum + row.height + 8, 0) : 66) + 12 };
   }
 
   function drawTeam(ctx, layout, x, y, highlightUid, flagImages) {
@@ -160,20 +161,20 @@ main{max-width:1180px;margin:auto;padding:24px}section{background:#1b2430;border
     const accent = blue ? COLORS.blue : red ? COLORS.red : COLORS.muted;
     const title = blue ? '蓝队' : red ? '红队' : `队伍 ${value(layout.team)}`;
     roundRect(ctx, x, y, PANEL_WIDTH, layout.height, 15, COLORS.panel);
-    roundRect(ctx, x + 12, y + 12, PANEL_WIDTH - 24, 48, 8, blue ? '#203d54' : red ? '#4a3039' : '#344456');
-    ctx.font = `700 25px ${FONT}`;
+    roundRect(ctx, x + 12, y + 12, PANEL_WIDTH - 24, 56, 8, blue ? '#203d54' : red ? '#4a3039' : '#344456');
+    ctx.font = `700 26px ${FONT}`;
     ctx.fillStyle = accent;
-    const heading = `${title} · ${layout.rows.length} 人`;
-    ctx.fillText(heading, x + 30, y + 44);
+    const heading = `${title} · ${layout.rows.length} 人 · 最高权重 ${rating(layout.maxBr)}`;
+    ctx.fillText(heading, x + 30, y + 49);
     let flagX = x + 46 + ctx.measureText(heading).width;
     for (const code of new Set(layout.rows.map(row => row.flagCode).filter(Boolean))) {
       const image = flagImages.get(code);
       if (image) {
-        drawFlag(ctx, image, flagX, y + 26, 28, 19);
-        flagX += 32;
+        drawFlag(ctx, image, flagX, y + 29, 31, 22);
+        flagX += 36;
       }
     }
-    let rowY = y + 70;
+    let rowY = y + 80;
     if (!layout.rows.length) {
       ctx.font = `20px ${FONT}`;
       ctx.fillStyle = COLORS.muted;
@@ -184,33 +185,43 @@ main{max-width:1180px;margin:auto;padding:24px}section{background:#1b2430;border
       roundRect(ctx, x + 14, rowY, PANEL_WIDTH - 28, row.height, 9, selected ? COLORS.highlight : COLORS.card);
       if (selected) roundRect(ctx, x + 14, rowY, 5, row.height, 2, COLORS.highlightLine);
       const left = x + 32;
-      let textY = rowY + 29;
-      ctx.font = `700 22px ${FONT}`;
-      textY = drawLines(ctx, row.name, left, textY, 29, selected ? COLORS.gold : COLORS.text);
+      ctx.font = `700 30px ${FONT}`;
+      drawLines(ctx, row.name, left, rowY + 39, 38, selected ? COLORS.gold : COLORS.text);
       const separatorX = left + ctx.measureText(row.name[row.name.length - 1]).width + 9;
-      const nameBaseline = rowY + 29 + (row.name.length - 1) * 29;
+      const nameBaseline = rowY + 39 + (row.name.length - 1) * 38;
       ctx.fillText('·', separatorX, nameBaseline);
       const flag = flagImages.get(row.flagCode);
-      if (flag) drawFlag(ctx, flag, separatorX + 19, nameBaseline - 18, 34, 23);
+      if (flag) drawFlag(ctx, flag, separatorX + 23, nameBaseline - 27, 46, 31);
       else {
-        ctx.font = `16px ${FONT}`;
+        ctx.font = `20px ${FONT}`;
         ctx.fillStyle = COLORS.muted;
-        ctx.fillText('N/A', separatorX + 19, nameBaseline);
+        ctx.fillText('N/A', separatorX + 23, nameBaseline);
       }
-      ctx.font = `700 22px ${FONT}`;
+      ctx.font = `700 20px ${FONT}`;
       ctx.fillStyle = selected ? COLORS.gold : accent;
       ctx.textAlign = 'right';
-      ctx.fillText(`BR ${rating(row.player.max_br)}`, x + PANEL_WIDTH - 32, rowY + 29);
+      ctx.fillText(`BR ${rating(row.player.max_br)}`, x + PANEL_WIDTH - 32, rowY + 38);
       ctx.textAlign = 'left';
-      textY += 7;
-      ctx.font = `19px ${FONT}`;
-      textY = drawLines(ctx, row.vehicles, left, textY, 25, COLORS.text);
-      textY += 7;
+      const metrics = [
+        ['得分', row.player.score], ['对空击杀', row.player.kills],
+        ['对地击杀', row.player.groundKills], ['死亡', row.player.deaths],
+      ];
+      const metricsY = rowY + row.metricsOffset;
+      const metricGap = 10, metricWidth = (PANEL_WIDTH - 64 - metricGap * 3) / 4;
+      metrics.forEach(([label, amount], index) => {
+        const metricX = left + index * (metricWidth + metricGap);
+        roundRect(ctx, metricX, metricsY, metricWidth, 62, 6, selected ? '#405143' : '#213245');
+        ctx.font = `16px ${FONT}`;
+        ctx.fillStyle = COLORS.muted;
+        ctx.fillText(label, metricX + 12, metricsY + 21);
+        ctx.font = `700 28px ${FONT}`;
+        ctx.fillStyle = index === 0 ? COLORS.gold : COLORS.text;
+        ctx.fillText(value(amount), metricX + 12, metricsY + 52);
+      });
       ctx.font = `18px ${FONT}`;
-      textY = drawLines(ctx, row.stats, left, textY, 24, COLORS.text);
-      textY += 5;
-      ctx.font = `17px ${FONT}`;
-      drawLines(ctx, row.other, left, textY, 23, COLORS.muted);
+      const afterVehicles = drawLines(ctx, row.vehicles, left, metricsY + 62 + 12 + 18, 24, COLORS.text);
+      ctx.font = `16px ${FONT}`;
+      drawLines(ctx, row.other, left, afterVehicles + 5, 22, COLORS.muted);
       rowY += row.height + 8;
     }
   }
@@ -262,7 +273,7 @@ main{max-width:1180px;margin:auto;padding:24px}section{background:#1b2430;border
     ctx.font = `18px ${FONT}`;
     ctx.fillStyle = COLORS.muted;
     ctx.textAlign = 'right';
-    ctx.fillText('最终战绩 · 队内按权重从高到低', WIDTH - MARGIN, 60);
+    ctx.fillText('最终战绩 · 队内按得分从高到低', WIDTH - MARGIN, 60);
     ctx.textAlign = 'left';
     const metaWidth = (WIDTH - 2 * MARGIN - 2 * GAP) / 3;
     let metaY = 104;
