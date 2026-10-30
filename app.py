@@ -236,12 +236,6 @@ def index():
     return FileResponse(ROOT / "static" / "index.html", headers={"Cache-Control": "no-store"})
 
 
-@app.get("/battle-image.js")
-def battle_image_script():
-    return FileResponse(ROOT / "static" / "battle_image.js", media_type="text/javascript",
-                        headers={"Cache-Control": "no-store"})
-
-
 @app.get("/stats")
 def stats_page():
     return FileResponse(ROOT / "static" / "stats.html", headers={"Cache-Control": "no-store"})
