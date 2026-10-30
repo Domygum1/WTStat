@@ -173,8 +173,8 @@ async function deleteSelectedFiles(){
   setStatus(`已删除 ${data.deleted_sessions} 场、${data.deleted_parts} 个 Replay 分段；统计结果已保留。`,'notice');
  }catch(error){setStatus('删除失败：'+error.message,'error')}finally{updateControls()}
 }
-for(let major=1;major<=14;major++)for(const decimal of [0,3,7]){const value=`${major}.${decimal}`;for(const selector of ['#brMin','#brMax']){const option=document.createElement('option');option.value=value;option.textContent=value;$(selector).append(option)}}
-$('#brMin').value='1.0';$('#brMax').value='14.7';
+for(let major=1;major<=15;major++)for(const decimal of [0,3,7]){if(major===15&&decimal!==0)continue;const value=`${major}.${decimal}`;for(const selector of ['#brMin','#brMax']){const option=document.createElement('option');option.value=value;option.textContent=value;$(selector).append(option)}}
+$('#brMin').value='1.0';$('#brMax').value='15.0';
 $('#brMin').onchange=()=>{if(Number($('#brMin').value)>Number($('#brMax').value))$('#brMax').value=$('#brMin').value;if(search)renderResults()};
 $('#brMax').onchange=()=>{if(Number($('#brMax').value)<Number($('#brMin').value))$('#brMin').value=$('#brMax').value;if(search)renderResults()};
 $('#countryFilter').onchange=()=>{if(search)renderResults()};

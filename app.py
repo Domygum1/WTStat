@@ -9,7 +9,7 @@ import sqlite3
 import subprocess
 import threading
 import time
-from contextlib import closing
+from contextlib import asynccontextmanager, closing
 from functools import lru_cache
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,7 +29,15 @@ MAX_REPLAY_PARTS = 256
 UA = "WTStat/1.0 (local personal replay viewer)"
 LOCK = threading.Lock()
 LAST_REQUEST = 0.0
-app = FastAPI(title="WTStat")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    sync_bundled_wiki()
+    yield
+
+
+app = FastAPI(title="WTStat", lifespan=lifespan)
 
 
 def db():
@@ -44,6 +52,45 @@ def db():
     c.execute("CREATE TABLE IF NOT EXISTS recent_players (query TEXT PRIMARY KEY COLLATE NOCASE, searched REAL NOT NULL)")
     c.commit()
     return c
+
+
+def sync_bundled_wiki() -> None:
+    """Install the tracked Wiki snapshot into a local database after git pull."""
+    path = ROOT / "data" / "wiki_vehicles.csv"
+    if not path.is_file():
+        return
+    fields = ("vehicle_id", "name", "category", "vehicle_role", "research_country_code",
+              "research_country", "operator_country", "operator_countries_json", "br_ab",
+              "br_rb", "br_sb", "br_ground_rb", "br_ground_sb", "source_url", "updated_utc")
+    with path.open(encoding="utf-8-sig", newline="") as source:
+        reader = csv.DictReader(source)
+        if not set(fields).issubset(reader.fieldnames or []):
+            raise RuntimeError("随程序提供的 Wiki 载具 CSV 缺少必要列。")
+        rows = list(reader)
+    ids = [row["vehicle_id"] for row in rows]
+    if len(rows) < 3000 or not all(ids) or len(set(ids)) != len(ids):
+        raise RuntimeError("随程序提供的 Wiki 载具 CSV 不完整，数据库未更新。")
+    with closing(db()) as connection:
+        connection.execute("CREATE TABLE IF NOT EXISTS wiki_vehicles ("
+                           "vehicle_id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL, "
+                           "vehicle_role TEXT, research_country_code TEXT, research_country TEXT, "
+                           "operator_country TEXT, operator_countries_json TEXT, "
+                           "br_ab REAL, br_rb REAL, br_sb REAL, br_ground_rb REAL, br_ground_sb REAL, "
+                           "source_url TEXT NOT NULL, updated_utc TEXT NOT NULL)")
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(wiki_vehicles)")}
+        for field in ("vehicle_role", "operator_countries_json"):
+            if field not in columns:
+                connection.execute(f"ALTER TABLE wiki_vehicles ADD COLUMN {field} TEXT")
+        connection.execute("DELETE FROM wiki_vehicles")
+        connection.executemany(
+            f"INSERT INTO wiki_vehicles ({','.join(fields)}) VALUES ({','.join('?' for _ in fields)})",
+            ([row[field] for field in fields] for row in rows),
+        )
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_wiki_vehicles_name ON wiki_vehicles(name)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_wiki_vehicles_category ON wiki_vehicles(category)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_wiki_vehicles_country ON wiki_vehicles(research_country_code)")
+        connection.commit()
+    wiki_catalog.cache_clear()
 
 
 def cookie():
@@ -667,7 +714,7 @@ def catalog():
 
 @lru_cache(maxsize=1)
 def wiki_catalog():
-    with db() as connection:
+    with closing(db()) as connection:
         if not connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='wiki_vehicles'").fetchone():
             return {}
         return {row["vehicle_id"].casefold(): dict(row) for row in connection.execute(
