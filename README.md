@@ -50,7 +50,7 @@
 
 Wiki 的[武器目录](https://wiki.warthunder.com/collections/weapon)提供展示名称和部分武器页，但并未列出每种 Replay 内部代码。代码与名称的精确对应取自游戏的 `units_weaponry.csv`（[Wiki 本地化指南](https://wiki.warthunder.com/cdk/1819-a-better-guide-to-localization-mods)说明该文件，[公开游戏数据镜像](https://github.com/gszabi99/War-Thunder-Datamine/blob/master/lang.vromfs.bin_u/lang/units_weaponry.csv)提供文件）；CSV 的 `wiki_url` 仅在 Wiki 武器目录或载具武器栏能够核实时填写。更新命令：`.venv\Scripts\python.exe scripts\update_missile_names.py --verify-observed`；`--offline` 用本地源文件重建，`--refresh` 重新获取。更新后重启程序。
 
-载具名称前的特殊标志（例如东德 `◊`）由 Wiki 的 `WTSymbols` 字体绘制。本地页面使用 `static/fonts/symbols_skyquake.bfc9728c6a6bc73f209a.ttf`，来源：<https://wiki.warthunder.com/fonts/symbols_skyquake.bfc9728c6a6bc73f209a.ttf>。该字体属于 Wiki 提供的资源，不属于本项目的 AGPL 源码许可。
+载具名称前的特殊标志（例如东德 `◊`）由 Wiki 的 `WTSymbols` 字体绘制。本地页面及导出的战局图片使用 `static/fonts/symbols_skyquake.bfc9728c6a6bc73f209a.ttf`，来源：<https://wiki.warthunder.com/fonts/symbols_skyquake.bfc9728c6a6bc73f209a.ttf>。该字体属于 Wiki 提供的资源，不属于本项目的 AGPL 源码许可。
 
 国旗图标保存在 `static/flags/`，避免 Windows 将 Unicode 国旗显示成字母。九面现行国旗来自 [flag-icons v7.5.0](https://github.com/lipis/flag-icons/tree/v7.5.0/flags/4x3)（MIT，许可证见 `static/flags/LICENSE-flag-icons.txt`）；苏联旗来自 [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Flag_of_the_Soviet_Union.svg)（Public Domain）。
 
