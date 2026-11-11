@@ -10,6 +10,24 @@ import app
 
 
 class ReplayModeTest(unittest.TestCase):
+    def test_new_mrank_overrides_catalog_and_old_cached_rating_is_preserved(self):
+        sid = "abababababababab"
+        player = {"uid": "123", "name": "pilot", "team": 1,
+                  "auto_squad": True,
+                  "configured": [{"code": "f_2a_adtw", "mrank": 39}]}
+        with sqlite3.connect(":memory:") as connection:
+            current = {"start_utc": "2026-11-11T20:00:00+00:00",
+                       "game_mode": "realistic", "battle_group": "aircraft",
+                       "players": [player]}
+            app.add_battle_ratings(sid, current, connection)
+            self.assertEqual((player["max_br"], current["match_br"]), (14.0, 14.0))
+            legacy = {"start_utc": "2026-10-30T20:00:00+00:00",
+                      "game_mode": "realistic", "battle_group": "aircraft",
+                      "players": [{**player, "configured": [{"code": "f_2a_adtw"}],
+                                   "max_br": 13.0}]}
+            app.add_battle_ratings(sid, legacy, connection)
+            self.assertEqual(legacy["match_br"], 13.0)
+
     def test_missing_lineup_tries_0001_then_remaining_parts(self):
         sid = "cccccccccccccccc"
         player = {"uid": "4014227", "name": "RXDimA", "score": 717,
@@ -54,7 +72,7 @@ class ReplayModeTest(unittest.TestCase):
         sid = "bbbbbbbbbbbbbbbb"
         data = {"game_mode": "realistic", "battle_group": "tank", "players": [
             {"uid": "123", "name": "spawned", "team": 1, "auto_squad": True,
-             "configured": [{"code": "uk_t_90s_bheeshma"}], "score": 300},
+             "configured": [{"code": "uk_t_90s_bheeshma", "mrank": 36}], "score": 300},
             {"uid": "124", "name": "unspawned", "team": 2, "auto_squad": True,
              "configured": [], "score": 0},
             {"uid": "125", "name": "not joined", "team": 0, "auto_squad": False,
@@ -80,7 +98,7 @@ class ReplayModeTest(unittest.TestCase):
     def test_stats_cache_uses_local_replay_metadata(self):
         sid = "aaaaaaaaaaaaaaaa"
         data = {"players": [{"uid": "123", "name": "test", "auto_squad": True,
-                             "configured": [{"code": "uk_t_90s_bheeshma"}]}]}
+                             "configured": [{"code": "uk_t_90s_bheeshma", "mrank": 36}]}]}
         connection = sqlite3.connect(":memory:")
         connection.row_factory = sqlite3.Row
         with connection:

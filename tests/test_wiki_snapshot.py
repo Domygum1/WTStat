@@ -22,10 +22,11 @@ class WikiSnapshotTest(unittest.TestCase):
                                        "WHERE vehicle_id='ef_2000a_aesa'")
                     connection.commit()
                 app.sync_bundled_wiki()
-                self.assertEqual(app.vehicle_battle_rating(
-                    "ef_2000a_aesa", "realistic", "aircraft"), 15.0)
-                self.assertEqual(app.vehicle_battle_rating(
-                    "ef_2000a_aesa", "realistic", "tank"), 14.0)
+                self.assertEqual(app.wiki_catalog()["ef_2000a_aesa"]["br_rb"], 15.0)
+                self.assertEqual(app.mrank_to_br(36), 13.0)
+                self.assertEqual(app.mrank_to_br(38), 13.7)
+                self.assertEqual(app.mrank_to_br(39), 14.0)
+                self.assertIsNone(app.mrank_to_br(None))
         app.wiki_catalog.cache_clear()
 
 
